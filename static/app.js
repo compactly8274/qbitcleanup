@@ -47,8 +47,7 @@ async function refreshStatus() {
     setBadge('orphans', data.orphan_count ?? 0);
     setBadge('trash', data.trash_count ?? 0);
   } catch {
-    const dot = document.getElementById('status-dot');
-    dot.className = 'status-dot disconnected';
+    document.getElementById('status-dot').className = 'status-dot disconnected';
     document.getElementById('status-text').textContent = 'Error';
   }
 }
@@ -60,25 +59,38 @@ function setBadge(tab, count) {
 
 // ── Orphans ───────────────────────────────────────────────────────────────────
 
-async function loadOrphans() {
+async function loadOrphans(force = false) {
   const list = document.getElementById('orphans-list');
-  list.innerHTML = '<div class="loading"><span class="spinner"></span>Scanning…</div>';
+  list.innerHTML = `<div class="loading"><span class="spinner"></span>${force ? 'Scanning…' : 'Loading…'}</div>`;
   try {
-    orphansData = await apiFetch('/api/orphans');
-    renderOrphans();
+    const url = force ? '/api/orphans?refresh=true' : '/api/orphans';
+    const res = await apiFetch(url);
+    orphansData = res.orphans ?? [];
+    renderOrphans(res);
     setBadge('orphans', orphansData.length);
   } catch (err) {
     list.innerHTML = `<div class="error-banner">${escHtml(err.message)}</div>`;
   }
 }
 
-function renderOrphans() {
+function renderOrphans(res) {
   const list = document.getElementById('orphans-list');
+  const lastScan = res.last_scan ? new Date(res.last_scan * 1000) : null;
+  const scanAge = lastScan ? formatAge(lastScan) : 'never';
+  const cachedLabel = res.cached
+    ? `<span class="scan-cached">cached · ${scanAge}</span>`
+    : `<span class="scan-fresh">scanned just now</span>`;
+  const warning = res.warning
+    ? `<div class="error-banner">${escHtml(res.warning)}</div>`
+    : '';
+
+  const header = `<div class="scan-meta">${cachedLabel}</div>${warning}`;
+
   if (!orphansData.length) {
-    list.innerHTML = '<div class="empty-state"><div class="empty-icon">✓</div><div>No orphaned files found</div></div>';
+    list.innerHTML = header + '<div class="empty-state"><div class="empty-icon">✓</div><div>No orphaned files found</div></div>';
     return;
   }
-  list.innerHTML = orphansData.map(item => fileRow(item, 'orphan')).join('');
+  list.innerHTML = header + orphansData.map(item => fileRow(item, 'orphan')).join('');
 }
 
 async function moveOne(path) {
@@ -225,15 +237,12 @@ function fileRow(item, type) {
   const date = item.modified ? new Date(item.modified * 1000).toLocaleDateString() : '—';
   const pathAttr = escAttr(type === 'trash' ? item.trash_path : item.path);
 
-  // For orphans show the relative path within downloads (e.g. "complete/OldMovie")
-  // For trash items show where they came from
   const subPath = type === 'orphan'
     ? (item.relative_path && item.relative_path !== item.name ? item.relative_path : null)
     : (item.original_path || null);
   const pathLine = subPath
     ? `<div class="file-path" title="${escAttr(subPath)}">${type === 'trash' ? '↩ ' : ''}${escHtml(subPath)}</div>`
     : '';
-  const originalPath = pathLine;
 
   let actions = '';
   if (type === 'orphan') {
@@ -254,11 +263,19 @@ function fileRow(item, type) {
           <span>${escHtml(item.size_human)}</span>
           <span>${date}</span>
         </div>
-        ${originalPath}
+        ${pathLine}
       </div>
       <div class="file-actions">${actions}</div>
     </div>
   `;
+}
+
+function formatAge(date) {
+  const secs = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (secs < 60) return 'just now';
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
+  if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
+  return `${Math.floor(secs / 86400)}d ago`;
 }
 
 // ── Modal ─────────────────────────────────────────────────────────────────────
