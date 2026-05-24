@@ -6,8 +6,10 @@ services:
     environment:
       - QBIT_HOST=http://localhost
       - QBIT_PORT=8080
-      - QBIT_USERNAME=admin
-      - QBIT_PASSWORD=adminadmin
+      - QBIT_API_KEY=your_api_key_here
+      # Fallback for qBittorrent < 5.0 (remove if using API key)
+      #- QBIT_USERNAME=admin
+      #- QBIT_PASSWORD=adminadmin
       - DOWNLOADS_DIR=/downloads
       - TRASH_DIR=/downloads/.qbit-trash
     volumes:

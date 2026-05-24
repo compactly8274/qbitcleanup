@@ -7,21 +7,31 @@ _client = None
 def _get_client():
     global _client
     if _client is None:
-        _client = qbittorrentapi.Client(
+        kwargs = dict(
             host=config.QBIT_HOST,
             port=config.QBIT_PORT,
-            username=config.QBIT_USERNAME,
-            password=config.QBIT_PASSWORD,
             REQUESTS_ARGS={"timeout": 10},
             VERIFY_WEBUI_CERTIFICATE=False,
         )
+        if config.QBIT_API_KEY:
+            kwargs["api_key"] = config.QBIT_API_KEY
+        else:
+            kwargs["username"] = config.QBIT_USERNAME
+            kwargs["password"] = config.QBIT_PASSWORD
+        _client = qbittorrentapi.Client(**kwargs)
     return _client
+
+
+def _connect(client):
+    """Authenticate. API key auth needs no explicit login call."""
+    if not config.QBIT_API_KEY:
+        client.auth_log_in()
 
 
 def get_status():
     client = _get_client()
     try:
-        client.auth_log_in()
+        _connect(client)
         version = client.app.version
         return {"connected": True, "version": version}
     except qbittorrentapi.LoginFailed:
@@ -36,7 +46,7 @@ def get_torrent_paths():
     """Return a set of absolute paths claimed by active torrents, or None on error."""
     client = _get_client()
     try:
-        client.auth_log_in()
+        _connect(client)
         torrents = client.torrents_info()
     except qbittorrentapi.LoginFailed:
         return None
