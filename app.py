@@ -28,6 +28,15 @@ _worker_thread = None
 _worker_lock = threading.Lock()
 
 
+def _startup_cleanup():
+    try:
+        n = db.cleanup_stale_cache()
+        if n:
+            log.info("Startup cleanup: removed %d stale orphan cache entries", n)
+    except Exception as e:
+        log.warning("Startup cleanup failed: %s", e)
+
+
 def _ensure_worker():
     global _worker_thread
     if _worker_thread is not None and _worker_thread.is_alive():
@@ -36,6 +45,7 @@ def _ensure_worker():
         if _worker_thread is not None and _worker_thread.is_alive():
             return
         log.info("Starting job worker thread")
+        threading.Thread(target=_startup_cleanup, daemon=True, name="startup-cleanup").start()
         _worker_thread = threading.Thread(target=_job_worker, daemon=True, name="job-worker")
         _worker_thread.start()
 
@@ -50,13 +60,24 @@ def _execute_job(job):
         for i, p in enumerate(paths):
             if db.is_job_cancelled(job_id):
                 break
+            clean_cache = False
             try:
                 dest = trash_mod.move_to_trash(p)
-                db.remove_from_cache(p)
                 moved.append({"from": p, "to": dest})
+                clean_cache = True
+            except FileNotFoundError:
+                clean_cache = True  # ghost entry — scrub it
             except Exception as e:
                 errors.append({"path": p, "error": str(e)})
-            db.update_job_progress(job_id, i + 1)
+            if clean_cache:
+                try:
+                    db.remove_from_cache(p)
+                except Exception:
+                    pass
+            try:
+                db.update_job_progress(job_id, i + 1)
+            except Exception:
+                pass
         return {"moved": moved, "errors": errors}
 
     if jtype == "restore":
@@ -67,9 +88,14 @@ def _execute_job(job):
             try:
                 dest = trash_mod.restore(p)
                 restored.append({"from": p, "to": dest})
+            except FileNotFoundError:
+                pass  # already restored or deleted elsewhere
             except Exception as e:
                 errors.append({"path": p, "error": str(e)})
-            db.update_job_progress(job_id, i + 1)
+            try:
+                db.update_job_progress(job_id, i + 1)
+            except Exception:
+                pass
         return {"restored": restored, "errors": errors}
 
     if jtype == "delete":
@@ -80,9 +106,14 @@ def _execute_job(job):
             try:
                 trash_mod.delete(p)
                 deleted.append(p)
+            except FileNotFoundError:
+                deleted.append(p)  # already gone, count as success
             except Exception as e:
                 errors.append({"path": p, "error": str(e)})
-            db.update_job_progress(job_id, i + 1)
+            try:
+                db.update_job_progress(job_id, i + 1)
+            except Exception:
+                pass
         return {"deleted": deleted, "errors": errors}
 
     raise ValueError(f"Unknown job type: {jtype}")

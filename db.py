@@ -274,3 +274,14 @@ def prune_jobs():
             "DELETE FROM jobs WHERE status IN ('done','error','cancelled') AND updated_at < ?",
             (cutoff,),
         )
+
+
+def cleanup_stale_cache():
+    """Remove orphan cache entries whose paths no longer exist on disk."""
+    with _conn() as c:
+        rows = c.execute("SELECT path FROM orphan_cache").fetchall()
+    stale = [r["path"] for r in rows if not Path(r["path"]).exists()]
+    if stale:
+        with _conn() as c:
+            c.executemany("DELETE FROM orphan_cache WHERE path=?", [(p,) for p in stale])
+    return len(stale)
