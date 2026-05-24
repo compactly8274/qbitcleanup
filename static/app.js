@@ -35,6 +35,13 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.tab').forEach(btn =>
     btn.addEventListener('click', () => switchTab(btn.dataset.tab))
   );
+  document.addEventListener('click', e => {
+    if (_jobsPanelOpen &&
+        !document.getElementById('jobs-panel').contains(e.target) &&
+        e.target.id !== 'jobs-indicator') {
+      closeJobsPanel();
+    }
+  });
   refreshStatus();
   loadOrphans();
   setInterval(refreshStatus, 15000);
@@ -107,10 +114,12 @@ async function pollJobs() {
     clearInterval(jobPollTimer);
     jobPollTimer = null;
     updateJobsIndicator();
+    closeJobsPanel();
     return;
   }
   try {
     const active = await apiFetch('/api/jobs');
+    renderJobsPanel(active);
     const activeIds = new Set(active.map(j => j.id));
     const completed = [...pendingJobs.keys()].filter(id => !activeIds.has(id));
     for (const id of completed) {
@@ -125,6 +134,85 @@ async function pollJobs() {
     }
     updateJobsIndicator();
   } catch { /* ignore poll errors */ }
+}
+
+// ── Jobs panel ────────────────────────────────────────────────────────────────
+
+const JOB_LABELS = {
+  move_to_trash: 'Moving to trash',
+  restore: 'Restoring',
+  delete: 'Deleting',
+};
+
+let _jobsPanelOpen = false;
+
+function toggleJobsPanel(e) {
+  e.stopPropagation();
+  const panel = document.getElementById('jobs-panel');
+  if (_jobsPanelOpen) {
+    closeJobsPanel();
+  } else {
+    _positionJobsPanel();
+    panel.style.display = 'block';
+    _jobsPanelOpen = true;
+  }
+}
+
+function closeJobsPanel() {
+  document.getElementById('jobs-panel').style.display = 'none';
+  _jobsPanelOpen = false;
+}
+
+function _positionJobsPanel() {
+  const indicator = document.getElementById('jobs-indicator');
+  const panel = document.getElementById('jobs-panel');
+  const rect = indicator.getBoundingClientRect();
+  panel.style.top = (rect.bottom + 8) + 'px';
+  panel.style.right = (window.innerWidth - rect.right) + 'px';
+  panel.style.left = 'auto';
+}
+
+function renderJobsPanel(jobs) {
+  if (!_jobsPanelOpen) return;
+  _positionJobsPanel();
+  const list = document.getElementById('jobs-panel-list');
+  if (!jobs.length) { closeJobsPanel(); return; }
+
+  list.innerHTML = jobs.map(job => {
+    const label = JOB_LABELS[job.type] || job.type;
+    const total = job.total || 0;
+    const done = job.progress || 0;
+    const pct = total > 0 ? Math.round(done / total * 100) : 0;
+    const isQueued = job.status === 'queued';
+
+    let etaHtml = '';
+    if (!isQueued && job.started_at && done > 0 && total > 0) {
+      const elapsed = Date.now() / 1000 - job.started_at;
+      const rate = done / elapsed;
+      const remaining = (total - done) / rate;
+      etaHtml = `<div class="job-eta">~${_fmtDuration(remaining)} remaining</div>`;
+    } else if (isQueued) {
+      etaHtml = `<div class="job-eta">queued</div>`;
+    }
+
+    return `<div class="job-item">
+      <div class="job-item-label">
+        <span>${escHtml(label)}</span>
+        <span class="job-item-fraction">${done} / ${total}</span>
+      </div>
+      <div class="job-progress-track">
+        <div class="job-progress-fill" style="width:${pct}%"></div>
+      </div>
+      ${etaHtml}
+    </div>`;
+  }).join('');
+}
+
+function _fmtDuration(s) {
+  if (s < 5) return 'a moment';
+  if (s < 60) return `${Math.round(s)}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`;
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
 }
 
 function _handleJobDone(job, info) {

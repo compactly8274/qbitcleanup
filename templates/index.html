@@ -14,7 +14,7 @@
         <span class="brand-name">qBit Cleanup</span>
       </div>
       <div style="display:flex;align-items:center;gap:0.5rem">
-        <span class="jobs-indicator" id="jobs-indicator" style="display:none"></span>
+        <span class="jobs-indicator" id="jobs-indicator" style="display:none" onclick="toggleJobsPanel(event)"></span>
         <div class="status-pill" id="status-pill">
           <span class="status-dot" id="status-dot"></span>
           <span id="status-text">Connecting…</span>
@@ -114,6 +114,12 @@
         <button class="btn btn-danger" id="modal-confirm-btn">Confirm</button>
       </div>
     </div>
+  </div>
+
+  <!-- JOBS PANEL -->
+  <div class="jobs-panel" id="jobs-panel" style="display:none">
+    <div class="jobs-panel-title">Active jobs</div>
+    <div id="jobs-panel-list"></div>
   </div>
 
   <div class="toast" id="toast"></div>

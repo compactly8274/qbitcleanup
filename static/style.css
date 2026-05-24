@@ -67,7 +67,9 @@ header {
   background: var(--surface2);
   border: 1px solid var(--accent);
   font-size: 0.78rem; font-weight: 500; color: var(--accent);
+  cursor: pointer; user-select: none;
 }
+.jobs-indicator:hover { background: #1e2040; }
 .jobs-indicator::before {
   content: '';
   display: inline-block; width: 7px; height: 7px;
@@ -75,6 +77,38 @@ header {
   border-radius: 50%; animation: spin 0.8s linear infinite;
   flex-shrink: 0;
 }
+
+/* JOBS PANEL */
+.jobs-panel {
+  position: fixed;
+  background: var(--surface2);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 0.9rem 1rem;
+  min-width: 260px; max-width: 340px;
+  z-index: 60;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.5);
+}
+.jobs-panel-title {
+  font-size: 0.75rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--text-muted); margin-bottom: 0.65rem;
+}
+.job-item { padding: 0.5rem 0; }
+.job-item + .job-item { border-top: 1px solid var(--border); }
+.job-item-label {
+  font-size: 0.85rem; font-weight: 500; margin-bottom: 0.4rem;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.job-item-fraction { font-size: 0.75rem; color: var(--text-muted); }
+.job-progress-track {
+  height: 4px; background: var(--border); border-radius: 2px; overflow: hidden;
+  margin-bottom: 0.3rem;
+}
+.job-progress-fill {
+  height: 100%; background: var(--accent);
+  border-radius: 2px; transition: width 0.4s ease;
+}
+.job-eta { font-size: 0.72rem; color: var(--text-muted); }
 
 /* DISK BAR */
 .disk-bar {

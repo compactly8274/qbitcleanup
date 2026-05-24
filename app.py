@@ -28,36 +28,40 @@ def _execute_job(job):
     payload = json.loads(job["payload"])
     paths = payload.get("paths", [])
     jtype = job["type"]
+    job_id = job["id"]
 
     if jtype == "move_to_trash":
         moved, errors = [], []
-        for p in paths:
+        for i, p in enumerate(paths):
             try:
                 dest = trash_mod.move_to_trash(p)
                 db.remove_from_cache(p)
                 moved.append({"from": p, "to": dest})
             except Exception as e:
                 errors.append({"path": p, "error": str(e)})
+            db.update_job_progress(job_id, i + 1)
         return {"moved": moved, "errors": errors}
 
     if jtype == "restore":
         restored, errors = [], []
-        for p in paths:
+        for i, p in enumerate(paths):
             try:
                 dest = trash_mod.restore(p)
                 restored.append({"from": p, "to": dest})
             except Exception as e:
                 errors.append({"path": p, "error": str(e)})
+            db.update_job_progress(job_id, i + 1)
         return {"restored": restored, "errors": errors}
 
     if jtype == "delete":
         deleted, errors = [], []
-        for p in paths:
+        for i, p in enumerate(paths):
             try:
                 trash_mod.delete(p)
                 deleted.append(p)
             except Exception as e:
                 errors.append({"path": p, "error": str(e)})
+            db.update_job_progress(job_id, i + 1)
         return {"deleted": deleted, "errors": errors}
 
     raise ValueError(f"Unknown job type: {jtype}")
