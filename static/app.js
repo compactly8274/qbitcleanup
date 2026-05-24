@@ -224,7 +224,16 @@ function fileRow(item, type) {
   const icon = item.is_dir ? '📁' : '📄';
   const date = item.modified ? new Date(item.modified * 1000).toLocaleDateString() : '—';
   const pathAttr = escAttr(type === 'trash' ? item.trash_path : item.path);
-  const originalPath = item.original_path ? `<div class="file-path" title="${escAttr(item.original_path)}">↩ ${escHtml(item.original_path)}</div>` : '';
+
+  // For orphans show the relative path within downloads (e.g. "complete/OldMovie")
+  // For trash items show where they came from
+  const subPath = type === 'orphan'
+    ? (item.relative_path && item.relative_path !== item.name ? item.relative_path : null)
+    : (item.original_path || null);
+  const pathLine = subPath
+    ? `<div class="file-path" title="${escAttr(subPath)}">${type === 'trash' ? '↩ ' : ''}${escHtml(subPath)}</div>`
+    : '';
+  const originalPath = pathLine;
 
   let actions = '';
   if (type === 'orphan') {

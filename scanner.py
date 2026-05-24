@@ -1,11 +1,8 @@
-import os
-import stat
 from pathlib import Path
 import config
 
 
 def _get_size(path):
-    """Recursively compute size of a file or directory."""
     p = Path(path)
     if p.is_symlink():
         return p.lstat().st_size
@@ -32,14 +29,19 @@ def _format_size(size_bytes):
     return f"{size_bytes:.1f} PB"
 
 
-def _entry_info(path):
+def _entry_info(path, downloads_root):
     p = Path(path)
+    try:
+        rel = str(p.relative_to(downloads_root))
+    except ValueError:
+        rel = p.name
     try:
         st = p.lstat()
         size = _get_size(path)
         return {
             "path": str(p),
             "name": p.name,
+            "relative_path": rel,
             "size": size,
             "size_human": _format_size(size),
             "modified": int(st.st_mtime),
@@ -49,6 +51,7 @@ def _entry_info(path):
         return {
             "path": str(p),
             "name": p.name,
+            "relative_path": rel,
             "size": 0,
             "size_human": "0 B",
             "modified": 0,
@@ -57,10 +60,59 @@ def _entry_info(path):
         }
 
 
+def _is_protected(entry, protected_paths):
+    """True if the entry itself is a protected path."""
+    candidates = {str(entry)}
+    if not entry.is_symlink():
+        try:
+            candidates.add(str(entry.resolve()))
+        except OSError:
+            pass
+    candidates.add(str(entry.absolute()))
+    return bool(candidates & protected_paths)
+
+
+def _has_protected_descendant(directory, protected_paths):
+    """True if any path inside directory is protected."""
+    prefix = str(directory).rstrip("/") + "/"
+    return any(p.startswith(prefix) for p in protected_paths)
+
+
+def _scan_dir(directory, protected_paths, trash, downloads_root, results):
+    try:
+        entries = sorted(directory.iterdir(), key=lambda e: e.name.lower())
+    except PermissionError:
+        return
+
+    for entry in entries:
+        # Skip hidden files and the trash folder
+        if entry.name.startswith("."):
+            continue
+        try:
+            if entry.resolve() == trash:
+                continue
+        except OSError:
+            pass
+
+        if _is_protected(entry, protected_paths):
+            # Owned by an active torrent — skip entirely
+            continue
+
+        if entry.is_dir() and not entry.is_symlink():
+            if _has_protected_descendant(entry, protected_paths):
+                # Mix of owned and unowned content inside — recurse
+                _scan_dir(entry, protected_paths, trash, downloads_root, results)
+            else:
+                # Nothing inside is protected — whole folder is orphaned
+                results.append(_entry_info(str(entry), downloads_root))
+        else:
+            results.append(_entry_info(str(entry), downloads_root))
+
+
 def scan_orphans(protected_paths):
     """
-    Scan DOWNLOADS_DIR top-level entries and return those not in protected_paths.
-    protected_paths is a set of absolute path strings.
+    Recursively scan DOWNLOADS_DIR and return entries not claimed by any active torrent.
+    Drills into container folders (e.g. 'movies/', 'complete/') to find orphans within them.
     """
     downloads = Path(config.DOWNLOADS_DIR)
     trash = Path(config.TRASH_DIR).resolve()
@@ -70,31 +122,8 @@ def scan_orphans(protected_paths):
 
     orphans = []
     try:
-        entries = list(downloads.iterdir())
-    except PermissionError as e:
+        _scan_dir(downloads, protected_paths, trash, downloads, orphans)
+    except Exception as e:
         return {"error": str(e)}
-
-    for entry in sorted(entries, key=lambda e: e.name.lower()):
-        # Skip the trash directory itself
-        try:
-            if entry.resolve() == trash:
-                continue
-        except OSError:
-            pass
-        if entry.name.startswith("."):
-            continue
-
-        abs_path = str(entry.resolve()) if not entry.is_symlink() else str(entry)
-        norm_path = str(entry)
-
-        # Check if this entry or any parent is protected
-        is_protected = (
-            abs_path in protected_paths
-            or norm_path in protected_paths
-            or str(entry.absolute()) in protected_paths
-        )
-
-        if not is_protected:
-            orphans.append(_entry_info(str(entry)))
 
     return orphans
