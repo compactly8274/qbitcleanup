@@ -1,4 +1,5 @@
 import logging
+import shutil
 import time
 from flask import Flask, jsonify, request, render_template
 import config
@@ -20,16 +21,61 @@ with app.app_context():
 
 
 def _fresh_scan():
-    """Fetch torrent paths from qBit, scan filesystem, update cache. Returns (orphans, error)."""
+    """Fetch torrent paths, scan filesystem, update cache. Returns (orphans, error)."""
     paths = qbit.get_torrent_paths()
     if paths is None:
         return None, "Failed to fetch torrent list from qBittorrent"
-    result = scanner.scan_orphans(paths)
+
+    ignore_paths = db.get_ignore_paths()
+    result = scanner.scan_orphans(paths, ignore_paths=ignore_paths,
+                                  min_age_days=config.MIN_ORPHAN_AGE_DAYS)
     if isinstance(result, dict) and "error" in result:
         return None, result["error"]
-    db.set_orphan_cache(result)
-    log.info("Scan complete: %d orphan(s) found", len(result))
+
+    _, newly_found = db.set_orphan_cache(result)
+    log.info("Scan complete: %d orphan(s), %d new", len(result), len(newly_found))
+
+    # Auto-trash items that have been orphaned longer than AUTO_TRASH_DAYS
+    if config.AUTO_TRASH_DAYS:
+        for path in db.get_auto_trash_candidates():
+            try:
+                trash_mod.move_to_trash(path)
+                db.remove_from_cache(path)
+                log.info("Auto-trashed (age limit): %s", path)
+            except Exception as e:
+                log.warning("Auto-trash failed for %s: %s", path, e)
+
+    # Webhook on new orphans
+    if config.WEBHOOK_URL and newly_found:
+        _fire_webhook(result, newly_found)
+
     return result, None
+
+
+def _fire_webhook(orphans, newly_found):
+    try:
+        import requests as req
+        payload = {
+            "event": "new_orphans_found",
+            "new_count": len(newly_found),
+            "total_orphans": len(orphans),
+            "total_size_bytes": sum(o["size"] for o in orphans),
+            "new_paths": sorted(newly_found),
+        }
+        req.post(config.WEBHOOK_URL, json=payload, timeout=5)
+        log.info("Webhook fired: %d new orphan(s)", len(newly_found))
+    except Exception as e:
+        log.warning("Webhook failed: %s", e)
+
+
+def _disk_info():
+    try:
+        du = shutil.disk_usage(config.DOWNLOADS_DIR)
+        orphan_size = sum(o["size"] for o in db.get_cached_orphans())
+        return {"total": du.total, "used": du.used, "free": du.free,
+                "orphan_size": orphan_size}
+    except OSError:
+        return {}
 
 
 @app.route("/")
@@ -40,18 +86,18 @@ def index():
 @app.route("/api/status")
 def api_status():
     status = qbit.get_status()
-    orphan_count = len(db.get_cached_orphans())
-    trash_count = len(trash_mod.list_trash())
-    last_scan = db.last_scan_time()
-
+    orphans = db.get_cached_orphans()
     return jsonify({
         "connected": status["connected"],
         "version": status["version"],
         "error": status.get("error"),
-        "orphan_count": orphan_count,
-        "trash_count": trash_count,
-        "last_scan": last_scan,
+        "orphan_count": len(orphans),
+        "orphan_size": sum(o["size"] for o in orphans),
+        "trash_count": len(trash_mod.list_trash()),
+        "ignored_count": len(db.get_ignore_list()),
+        "last_scan": db.last_scan_time(),
         "cache_ttl": config.SCAN_CACHE_TTL,
+        "disk": _disk_info(),
         "downloads_dir": config.DOWNLOADS_DIR,
         "trash_dir": config.TRASH_DIR,
     })
@@ -63,12 +109,10 @@ def api_orphans():
 
     if not force and db.cache_is_fresh():
         orphans = db.get_cached_orphans()
-        log.debug("Returning %d orphan(s) from cache", len(orphans))
         return jsonify({"orphans": orphans, "last_scan": db.last_scan_time(), "cached": True})
 
     status = qbit.get_status()
     if not status["connected"]:
-        # Return stale cache rather than nothing if qBit is temporarily offline
         orphans = db.get_cached_orphans()
         return jsonify({
             "orphans": orphans,
@@ -87,12 +131,8 @@ def api_orphans():
 @app.route("/api/orphans/move", methods=["POST"])
 def api_orphans_move():
     data = request.get_json(silent=True) or {}
-    path = data.get("path")
-
-    if path:
-        targets = [path]
-    else:
-        targets = [o["path"] for o in db.get_cached_orphans()]
+    paths = data.get("paths") or ([data["path"]] if data.get("path") else None)
+    targets = paths if paths else [o["path"] for o in db.get_cached_orphans()]
 
     moved, errors = [], []
     for t in targets:
@@ -114,10 +154,9 @@ def api_trash():
 @app.route("/api/trash/restore", methods=["POST"])
 def api_trash_restore():
     data = request.get_json(silent=True) or {}
-    path = data.get("path")
-
+    paths = data.get("paths") or ([data["path"]] if data.get("path") else None)
     items = trash_mod.list_trash()
-    targets = [i["trash_path"] for i in items] if path is None else [path]
+    targets = paths if paths else [i["trash_path"] for i in items]
 
     restored, errors = [], []
     for t in targets:
@@ -133,10 +172,9 @@ def api_trash_restore():
 @app.route("/api/trash/delete", methods=["POST"])
 def api_trash_delete():
     data = request.get_json(silent=True) or {}
-    path = data.get("path")
-
+    paths = data.get("paths") or ([data["path"]] if data.get("path") else None)
     items = trash_mod.list_trash()
-    targets = [i["trash_path"] for i in items] if path is None else [path]
+    targets = paths if paths else [i["trash_path"] for i in items]
 
     deleted, errors = [], []
     for t in targets:
@@ -147,3 +185,31 @@ def api_trash_delete():
             errors.append({"path": t, "error": str(e)})
 
     return jsonify({"deleted": deleted, "errors": errors})
+
+
+@app.route("/api/ignore")
+def api_ignore():
+    return jsonify(db.get_ignore_list())
+
+
+@app.route("/api/ignore/add", methods=["POST"])
+def api_ignore_add():
+    data = request.get_json(silent=True) or {}
+    paths = data.get("paths") or ([data["path"]] if data.get("path") else [])
+    if not paths:
+        return jsonify({"error": "path or paths required"}), 400
+    for p in paths:
+        db.add_to_ignore(p)
+        db.remove_from_cache(p)
+    return jsonify({"ok": True, "count": len(paths)})
+
+
+@app.route("/api/ignore/remove", methods=["POST"])
+def api_ignore_remove():
+    data = request.get_json(silent=True) or {}
+    path = data.get("path")
+    if not path:
+        return jsonify({"error": "path required"}), 400
+    db.remove_from_ignore(path)
+    db.invalidate()
+    return jsonify({"ok": True})

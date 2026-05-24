@@ -1,115 +1,322 @@
 'use strict';
 
+// ── State ─────────────────────────────────────────────────────────────────────
+
 let currentTab = 'orphans';
 let orphansData = [];
 let trashData = [];
-let statusInterval = null;
+let ignoredData = [];
+let lastOrphanRes = null;
+let selectedPaths = new Set();
+let groupingEnabled = false;
+
+const FILE_TYPES = {
+  '📹 Video':    ['mkv','mp4','avi','mov','wmv','m4v','mpg','mpeg','ts','m2ts','flv','webm','vob'],
+  '🎵 Audio':    ['mp3','flac','wav','aac','ogg','opus','m4a','wma'],
+  '💬 Subtitle': ['srt','ass','ssa','vtt','sub','idx','sup'],
+  '📦 Archive':  ['zip','rar','7z','tar','gz','bz2','xz','iso','r00'],
+};
+
+function fileTypeLabel(name) {
+  const ext = name.split('.').pop().toLowerCase();
+  for (const [label, exts] of Object.entries(FILE_TYPES)) {
+    if (exts.includes(ext)) return label;
+  }
+  return '📄 Other';
+}
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
-  setupTabs();
+  document.querySelectorAll('.tab').forEach(btn =>
+    btn.addEventListener('click', () => switchTab(btn.dataset.tab))
+  );
   refreshStatus();
   loadOrphans();
-  statusInterval = setInterval(refreshStatus, 15000);
+  setInterval(refreshStatus, 15000);
 });
-
-// ── Tabs ──────────────────────────────────────────────────────────────────────
-
-function setupTabs() {
-  document.querySelectorAll('.tab').forEach(btn => {
-    btn.addEventListener('click', () => switchTab(btn.dataset.tab));
-  });
-}
 
 function switchTab(tab) {
   currentTab = tab;
   document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === `view-${tab}`));
+  clearSelection();
   if (tab === 'orphans') loadOrphans();
-  else loadTrash();
+  else if (tab === 'trash') loadTrash();
+  else loadIgnored();
 }
 
-// ── Status ────────────────────────────────────────────────────────────────────
+// ── Status + disk bar ─────────────────────────────────────────────────────────
 
 async function refreshStatus() {
   try {
-    const data = await apiFetch('/api/status');
+    const d = await apiFetch('/api/status');
     const dot = document.getElementById('status-dot');
     const text = document.getElementById('status-text');
-    if (data.connected) {
-      dot.className = 'status-dot connected';
-      text.textContent = `Connected${data.version ? ' v' + data.version : ''}`;
-    } else {
-      dot.className = 'status-dot disconnected';
-      text.textContent = data.error ? `Offline: ${data.error}` : 'Offline';
-    }
-    setBadge('orphans', data.orphan_count ?? 0);
-    setBadge('trash', data.trash_count ?? 0);
+    dot.className = 'status-dot ' + (d.connected ? 'connected' : 'disconnected');
+    text.textContent = d.connected
+      ? `Connected${d.version ? ' v' + d.version : ''}`
+      : (d.error ? `Offline: ${d.error}` : 'Offline');
+
+    setBadge('orphans', d.orphan_count ?? 0);
+    setBadge('trash', d.trash_count ?? 0);
+    setBadge('ignored', d.ignored_count ?? 0);
+    renderDiskBar(d.disk, d.orphan_size ?? 0);
   } catch {
     document.getElementById('status-dot').className = 'status-dot disconnected';
     document.getElementById('status-text').textContent = 'Error';
   }
 }
 
-function setBadge(tab, count) {
+function renderDiskBar(disk, orphanSize) {
+  const el = document.getElementById('disk-bar');
+  if (!disk || !disk.total) { el.innerHTML = ''; return; }
+  const pct = v => Math.round(v / disk.total * 100);
+  const orphanPct = pct(orphanSize);
+  el.innerHTML = `
+    <div class="disk-track" style="--orphan-pct:${orphanPct}%">
+      <div class="disk-track-fill" style="width:${pct(disk.used)}%"></div>
+    </div>
+    <span class="disk-orphan">&#9632; ${fmtSize(orphanSize)} orphaned</span>
+    <span class="disk-free">&#9632; ${fmtSize(disk.free)} free</span>
+    <span style="color:var(--text-muted)">of ${fmtSize(disk.total)} total</span>
+  `;
+}
+
+function setBadge(tab, n) {
   const el = document.getElementById(`badge-${tab}`);
-  if (el) el.textContent = count;
-}
-
-// ── Sorting ───────────────────────────────────────────────────────────────────
-
-function sortedData(data, selectId) {
-  const val = document.getElementById(selectId)?.value ?? 'size-desc';
-  const [field, dir] = val.split('-');
-  const key = field === 'size' ? 'size' : 'accessed';
-  const asc = dir === 'asc';
-  return [...data].sort((a, b) => asc ? a[key] - b[key] : b[key] - a[key]);
-}
-
-function applySort(tab) {
-  if (tab === 'orphans') renderOrphans(_lastOrphanRes);
-  else renderTrash();
+  if (el) el.textContent = n;
 }
 
 // ── Orphans ───────────────────────────────────────────────────────────────────
 
-let _lastOrphanRes = null;
-
 async function loadOrphans(force = false) {
-  const list = document.getElementById('orphans-list');
-  list.innerHTML = `<div class="loading"><span class="spinner"></span>${force ? 'Scanning…' : 'Loading…'}</div>`;
+  setListLoading('orphans-list', force ? 'Scanning…' : 'Loading…');
   try {
-    const url = force ? '/api/orphans?refresh=true' : '/api/orphans';
-    const res = await apiFetch(url);
+    const res = await apiFetch(force ? '/api/orphans?refresh=true' : '/api/orphans');
     orphansData = res.orphans ?? [];
-    _lastOrphanRes = res;
-    renderOrphans(res);
+    lastOrphanRes = res;
+    renderOrphans();
     setBadge('orphans', orphansData.length);
   } catch (err) {
-    list.innerHTML = `<div class="error-banner">${escHtml(err.message)}</div>`;
+    document.getElementById('orphans-list').innerHTML =
+      `<div class="error-banner">${escHtml(err.message)}</div>`;
   }
 }
 
-function renderOrphans(res) {
+function renderOrphans() {
   const list = document.getElementById('orphans-list');
+  const res = lastOrphanRes || {};
   const lastScan = res.last_scan ? new Date(res.last_scan * 1000) : null;
-  const scanAge = lastScan ? formatAge(lastScan) : 'never';
-  const cachedLabel = res.cached
-    ? `<span class="scan-cached">cached · ${scanAge}</span>`
-    : `<span class="scan-fresh">scanned just now</span>`;
-  const warning = res.warning
-    ? `<div class="error-banner">${escHtml(res.warning)}</div>`
-    : '';
+  const meta = `<div class="scan-meta">${
+    res.cached
+      ? `<span class="scan-cached">cached · ${lastScan ? formatAge(lastScan) : '—'}</span>`
+      : '<span class="scan-fresh">scanned just now</span>'
+  }${res.warning ? ` &nbsp;⚠ ${escHtml(res.warning)}` : ''}</div>`;
 
-  const header = `<div class="scan-meta">${cachedLabel}</div>${warning}`;
+  const filtered = applyFilters(orphansData, 'orphan');
 
-  if (!orphansData.length) {
-    list.innerHTML = header + '<div class="empty-state"><div class="empty-icon">✓</div><div>No orphaned files found</div></div>';
+  if (!filtered.length) {
+    list.innerHTML = meta + '<div class="empty-state"><div class="empty-icon">✓</div><div>No orphaned files found</div></div>';
     return;
   }
-  list.innerHTML = header + sortedData(orphansData, 'orphan-sort').map(item => fileRow(item, 'orphan')).join('');
+
+  list.innerHTML = meta + (groupingEnabled ? renderGrouped(filtered, 'orphan') : filtered.map(i => fileRow(i, 'orphan')).join(''));
 }
+
+// ── Trash ─────────────────────────────────────────────────────────────────────
+
+async function loadTrash() {
+  setListLoading('trash-list', 'Loading…');
+  try {
+    trashData = await apiFetch('/api/trash');
+    renderTrash();
+    setBadge('trash', trashData.length);
+  } catch (err) {
+    document.getElementById('trash-list').innerHTML =
+      `<div class="error-banner">${escHtml(err.message)}</div>`;
+  }
+}
+
+function renderTrash() {
+  const list = document.getElementById('trash-list');
+  const filtered = applyFilters(trashData, 'trash');
+  list.innerHTML = filtered.length
+    ? filtered.map(i => fileRow(i, 'trash')).join('')
+    : '<div class="empty-state"><div class="empty-icon">🗑</div><div>Trash is empty</div></div>';
+}
+
+// ── Ignored ───────────────────────────────────────────────────────────────────
+
+async function loadIgnored() {
+  setListLoading('ignored-list', 'Loading…');
+  try {
+    ignoredData = await apiFetch('/api/ignore');
+    renderIgnored();
+    setBadge('ignored', ignoredData.length);
+  } catch (err) {
+    document.getElementById('ignored-list').innerHTML =
+      `<div class="error-banner">${escHtml(err.message)}</div>`;
+  }
+}
+
+function renderIgnored() {
+  const list = document.getElementById('ignored-list');
+  if (!ignoredData.length) {
+    list.innerHTML = '<div class="empty-state"><div class="empty-icon">✓</div><div>No ignored paths</div></div>';
+    return;
+  }
+  list.innerHTML = ignoredData.map(item => `
+    <div class="file-row">
+      <div class="row-check"></div>
+      <div class="file-icon">🚫</div>
+      <div class="file-info">
+        <div class="file-name" title="${escAttr(item.path)}">${escHtml(item.path)}</div>
+        <div class="file-meta"><span>Added ${new Date(item.added_at * 1000).toLocaleDateString()}</span></div>
+      </div>
+      <div class="file-actions">
+        <button class="btn btn-secondary btn-sm" onclick="unignore('${escAttr(item.path)}')">Unignore</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+// ── Filtering + sorting ───────────────────────────────────────────────────────
+
+function applyFilters(data, type) {
+  const searchId = type === 'orphan' ? 'search-orphans' : 'search-trash';
+  const sortId   = type === 'orphan' ? 'orphan-sort'    : 'trash-sort';
+  const query = (document.getElementById(searchId)?.value ?? '').toLowerCase();
+  const ageDays = parseInt(document.getElementById('age-filter')?.value ?? '0');
+  const [sortField, sortDir] = (document.getElementById(sortId)?.value ?? 'size-desc').split('-');
+  const asc = sortDir === 'asc';
+  const key = sortField === 'size' ? 'size' : 'accessed';
+  const cutoff = ageDays ? Date.now() / 1000 - ageDays * 86400 : 0;
+
+  return data
+    .filter(i => !query || i.name.toLowerCase().includes(query) || (i.relative_path || '').toLowerCase().includes(query))
+    .filter(i => !cutoff || i.modified < cutoff)
+    .sort((a, b) => asc ? a[key] - b[key] : b[key] - a[key]);
+}
+
+function renderGrouped(items, type) {
+  const groups = {};
+  for (const item of items) {
+    const label = item.is_dir ? '📁 Folders' : fileTypeLabel(item.name);
+    (groups[label] ??= []).push(item);
+  }
+  const order = ['📁 Folders', '📹 Video', '🎵 Audio', '💬 Subtitle', '📦 Archive', '📄 Other'];
+  const sorted = Object.entries(groups).sort(([a], [b]) => {
+    const ai = order.indexOf(a), bi = order.indexOf(b);
+    return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
+  });
+  return sorted.map(([label, grpItems]) =>
+    `<div class="group-header">${escHtml(label)} <span style="opacity:.5">(${grpItems.length})</span></div>` +
+    grpItems.map(i => fileRow(i, type)).join('')
+  ).join('');
+}
+
+function toggleGrouping() {
+  groupingEnabled = !groupingEnabled;
+  document.getElementById('btn-group').classList.toggle('active', groupingEnabled);
+  renderOrphans();
+}
+
+// ── File row ──────────────────────────────────────────────────────────────────
+
+function fileRow(item, type) {
+  const isOrphan = type === 'orphan';
+  const path = isOrphan ? item.path : item.trash_path;
+  const icon = item.is_dir ? '📁' : (isOrphan ? fileTypeIcon(item.name) : '📄');
+  const accessed = item.accessed ? new Date(item.accessed * 1000).toLocaleDateString() : '—';
+  const pa = escAttr(path);
+  const subPath = isOrphan
+    ? (item.relative_path !== item.name ? item.relative_path : null)
+    : (item.original_path || null);
+  const pathLine = subPath
+    ? `<div class="file-path" title="${escAttr(subPath)}">${isOrphan ? '' : '↩ '}${escHtml(subPath)}</div>`
+    : '';
+  const checked = selectedPaths.has(path) ? 'checked' : '';
+  const selCls = selectedPaths.has(path) ? ' selected' : '';
+
+  let actions = '';
+  if (isOrphan) {
+    actions = `<button class="btn btn-warning btn-sm" onclick="moveOne('${pa}')">Trash</button>
+               <button class="btn btn-ghost btn-sm" onclick="ignoreOne('${pa}')">Ignore</button>`;
+  } else {
+    actions = `<button class="btn btn-success btn-sm" onclick="restoreOne('${pa}')">Restore</button>
+               <button class="btn btn-danger btn-sm btn-ghost" onclick="deleteOne('${pa}')">Delete</button>`;
+  }
+
+  return `<div class="file-row${selCls}">
+    <div class="row-check"><input type="checkbox" ${checked} onchange="toggleSelect('${pa}', '${type}', this)"></div>
+    <div class="file-icon">${icon}</div>
+    <div class="file-info">
+      <div class="file-name" title="${escAttr(item.name)}">${escHtml(item.name)}</div>
+      <div class="file-meta"><span>${escHtml(item.size_human)}</span><span title="Last accessed">⏱ ${accessed}</span></div>
+      ${pathLine}
+    </div>
+    <div class="file-actions">${actions}</div>
+  </div>`;
+}
+
+function fileTypeIcon(name) {
+  const ext = name.split('.').pop().toLowerCase();
+  if (['mkv','mp4','avi','mov','wmv','m4v','mpg','mpeg','ts','flv','webm'].includes(ext)) return '📹';
+  if (['mp3','flac','wav','aac','ogg','opus','m4a','wma'].includes(ext)) return '🎵';
+  if (['srt','ass','ssa','vtt','sub','idx'].includes(ext)) return '💬';
+  if (['zip','rar','7z','tar','gz','bz2','xz','iso'].includes(ext)) return '📦';
+  return '📄';
+}
+
+// ── Selection ─────────────────────────────────────────────────────────────────
+
+function toggleSelect(path, type, cb) {
+  if (cb.checked) selectedPaths.add(path);
+  else selectedPaths.delete(path);
+  cb.closest('.file-row').classList.toggle('selected', cb.checked);
+  updateSelectionBar(type);
+}
+
+function toggleSelectAll(type) {
+  const cbId = type === 'orphans' ? 'check-all-orphans' : 'check-all-trash';
+  const master = document.getElementById(cbId);
+  const data = type === 'orphans' ? applyFilters(orphansData, 'orphan') : applyFilters(trashData, 'trash');
+  const pathKey = type === 'orphans' ? 'path' : 'trash_path';
+  if (master.checked) data.forEach(i => selectedPaths.add(i[pathKey]));
+  else data.forEach(i => selectedPaths.delete(i[pathKey]));
+  if (type === 'orphans') renderOrphans(); else renderTrash();
+  updateSelectionBar(type === 'orphans' ? 'orphan' : 'trash');
+}
+
+function clearSelection() {
+  selectedPaths.clear();
+  document.querySelectorAll('#check-all-orphans, #check-all-trash').forEach(c => c.checked = false);
+  if (currentTab === 'orphans') renderOrphans();
+  else if (currentTab === 'trash') renderTrash();
+  updateSelectionBar('none');
+}
+
+function updateSelectionBar(type) {
+  const bar = document.getElementById('selection-bar');
+  const count = selectedPaths.size;
+  if (!count) { bar.classList.remove('visible'); return; }
+
+  document.getElementById('sel-count').textContent = `${count} selected`;
+  const acts = document.getElementById('sel-actions');
+  if (type === 'orphan') {
+    acts.innerHTML = `
+      <button class="btn btn-warning btn-sm" onclick="moveSelected()">Move to Trash</button>
+      <button class="btn btn-ghost btn-sm" onclick="ignoreSelected()">Ignore</button>`;
+  } else {
+    acts.innerHTML = `
+      <button class="btn btn-success btn-sm" onclick="restoreSelected()">Restore</button>
+      <button class="btn btn-danger btn-sm" onclick="deleteSelected()">Delete</button>`;
+  }
+  bar.classList.add('visible');
+}
+
+// ── Actions — single ──────────────────────────────────────────────────────────
 
 async function moveOne(path) {
   setLoading(true);
@@ -118,56 +325,28 @@ async function moveOne(path) {
     if (res.errors?.length) throw new Error(res.errors[0].error);
     showToast('Moved to trash', 'success');
     await Promise.all([loadOrphans(), refreshStatus()]);
-  } catch (err) {
-    showToast(err.message, 'error');
-  } finally {
-    setLoading(false);
-  }
+  } catch (e) { showToast(e.message, 'error'); }
+  finally { setLoading(false); }
 }
 
-async function moveAll() {
-  if (!orphansData.length) return;
-  confirm(
-    'Move All to Trash',
-    `Move ${orphansData.length} item${orphansData.length !== 1 ? 's' : ''} to trash?`,
-    async () => {
-      setLoading(true);
-      try {
-        const res = await apiFetch('/api/orphans/move', 'POST', {});
-        const ok = res.moved?.length ?? 0;
-        const fail = res.errors?.length ?? 0;
-        showToast(`Moved ${ok} item${ok !== 1 ? 's' : ''}${fail ? `, ${fail} failed` : ''}`, fail ? 'error' : 'success');
-        await Promise.all([loadOrphans(), refreshStatus()]);
-      } catch (err) {
-        showToast(err.message, 'error');
-      } finally {
-        setLoading(false);
-      }
-    }
-  );
-}
-
-// ── Trash ─────────────────────────────────────────────────────────────────────
-
-async function loadTrash() {
-  const list = document.getElementById('trash-list');
-  list.innerHTML = '<div class="loading"><span class="spinner"></span>Loading…</div>';
+async function ignoreOne(path) {
+  setLoading(true);
   try {
-    trashData = await apiFetch('/api/trash');
-    renderTrash();
-    setBadge('trash', trashData.length);
-  } catch (err) {
-    list.innerHTML = `<div class="error-banner">${escHtml(err.message)}</div>`;
-  }
+    await apiFetch('/api/ignore/add', 'POST', { path });
+    showToast('Ignored', 'success');
+    await Promise.all([loadOrphans(), refreshStatus()]);
+  } catch (e) { showToast(e.message, 'error'); }
+  finally { setLoading(false); }
 }
 
-function renderTrash() {
-  const list = document.getElementById('trash-list');
-  if (!trashData.length) {
-    list.innerHTML = '<div class="empty-state"><div class="empty-icon">🗑</div><div>Trash is empty</div></div>';
-    return;
-  }
-  list.innerHTML = sortedData(trashData, 'trash-sort').map(item => fileRow(item, 'trash')).join('');
+async function unignore(path) {
+  setLoading(true);
+  try {
+    await apiFetch('/api/ignore/remove', 'POST', { path });
+    showToast('Unignored — cache invalidated', 'success');
+    await Promise.all([loadIgnored(), refreshStatus()]);
+  } catch (e) { showToast(e.message, 'error'); }
+  finally { setLoading(false); }
 }
 
 async function restoreOne(path) {
@@ -177,183 +356,190 @@ async function restoreOne(path) {
     if (res.errors?.length) throw new Error(res.errors[0].error);
     showToast('Restored', 'success');
     await Promise.all([loadTrash(), refreshStatus()]);
-  } catch (err) {
-    showToast(err.message, 'error');
-  } finally {
-    setLoading(false);
-  }
-}
-
-async function restoreAll() {
-  if (!trashData.length) return;
-  confirm(
-    'Restore All',
-    `Restore ${trashData.length} item${trashData.length !== 1 ? 's' : ''} to their original locations?`,
-    async () => {
-      setLoading(true);
-      try {
-        const res = await apiFetch('/api/trash/restore', 'POST', {});
-        const ok = res.restored?.length ?? 0;
-        const fail = res.errors?.length ?? 0;
-        showToast(`Restored ${ok}${fail ? `, ${fail} failed` : ''}`, fail ? 'error' : 'success');
-        await Promise.all([loadTrash(), refreshStatus()]);
-      } catch (err) {
-        showToast(err.message, 'error');
-      } finally {
-        setLoading(false);
-      }
-    }
-  );
+  } catch (e) { showToast(e.message, 'error'); }
+  finally { setLoading(false); }
 }
 
 async function deleteOne(path) {
-  confirm(
-    'Permanently Delete',
-    'This cannot be undone. Delete this item forever?',
-    async () => {
-      setLoading(true);
-      try {
-        const res = await apiFetch('/api/trash/delete', 'POST', { path });
-        if (res.errors?.length) throw new Error(res.errors[0].error);
-        showToast('Deleted', 'success');
-        await Promise.all([loadTrash(), refreshStatus()]);
-      } catch (err) {
-        showToast(err.message, 'error');
-      } finally {
-        setLoading(false);
-      }
-    }
-  );
+  confirm('Permanently Delete', 'This cannot be undone. Delete this item forever?', async () => {
+    setLoading(true);
+    try {
+      const res = await apiFetch('/api/trash/delete', 'POST', { path });
+      if (res.errors?.length) throw new Error(res.errors[0].error);
+      showToast('Deleted', 'success');
+      await Promise.all([loadTrash(), refreshStatus()]);
+    } catch (e) { showToast(e.message, 'error'); }
+    finally { setLoading(false); }
+  });
+}
+
+// ── Actions — bulk (all) ──────────────────────────────────────────────────────
+
+async function moveAll() {
+  const n = orphansData.length;
+  if (!n) return;
+  confirm('Move All to Trash', `Move all ${n} item${n !== 1 ? 's' : ''} to trash?`, async () => {
+    setLoading(true);
+    try {
+      const res = await apiFetch('/api/orphans/move', 'POST', {});
+      const ok = res.moved?.length ?? 0, fail = res.errors?.length ?? 0;
+      showToast(`Moved ${ok}${fail ? `, ${fail} failed` : ''}`, fail ? 'error' : 'success');
+      await Promise.all([loadOrphans(), refreshStatus()]);
+    } catch (e) { showToast(e.message, 'error'); }
+    finally { setLoading(false); }
+  });
+}
+
+async function restoreAll() {
+  const n = trashData.length;
+  if (!n) return;
+  confirm('Restore All', `Restore all ${n} item${n !== 1 ? 's' : ''} to original locations?`, async () => {
+    setLoading(true);
+    try {
+      const res = await apiFetch('/api/trash/restore', 'POST', {});
+      const ok = res.restored?.length ?? 0, fail = res.errors?.length ?? 0;
+      showToast(`Restored ${ok}${fail ? `, ${fail} failed` : ''}`, fail ? 'error' : 'success');
+      await Promise.all([loadTrash(), refreshStatus()]);
+    } catch (e) { showToast(e.message, 'error'); }
+    finally { setLoading(false); }
+  });
 }
 
 async function deleteAll() {
-  if (!trashData.length) return;
-  confirm(
-    'Delete All Permanently',
-    `Permanently delete all ${trashData.length} item${trashData.length !== 1 ? 's' : ''} in trash? This cannot be undone.`,
-    async () => {
-      setLoading(true);
-      try {
-        const res = await apiFetch('/api/trash/delete', 'POST', {});
-        const ok = res.deleted?.length ?? 0;
-        const fail = res.errors?.length ?? 0;
-        showToast(`Deleted ${ok}${fail ? `, ${fail} failed` : ''}`, fail ? 'error' : 'success');
-        await Promise.all([loadTrash(), refreshStatus()]);
-      } catch (err) {
-        showToast(err.message, 'error');
-      } finally {
-        setLoading(false);
-      }
-    }
-  );
+  const n = trashData.length;
+  if (!n) return;
+  confirm('Delete All Permanently', `Permanently delete all ${n} item${n !== 1 ? 's' : ''}? This cannot be undone.`, async () => {
+    setLoading(true);
+    try {
+      const res = await apiFetch('/api/trash/delete', 'POST', {});
+      const ok = res.deleted?.length ?? 0, fail = res.errors?.length ?? 0;
+      showToast(`Deleted ${ok}${fail ? `, ${fail} failed` : ''}`, fail ? 'error' : 'success');
+      await Promise.all([loadTrash(), refreshStatus()]);
+    } catch (e) { showToast(e.message, 'error'); }
+    finally { setLoading(false); }
+  });
 }
 
-// ── Render helpers ────────────────────────────────────────────────────────────
+// ── Actions — bulk (selected) ─────────────────────────────────────────────────
 
-function fileRow(item, type) {
-  const icon = item.is_dir ? '📁' : '📄';
-  const accessed = item.accessed ? new Date(item.accessed * 1000).toLocaleDateString() : '—';
-  const pathAttr = escAttr(type === 'trash' ? item.trash_path : item.path);
-
-  const subPath = type === 'orphan'
-    ? (item.relative_path && item.relative_path !== item.name ? item.relative_path : null)
-    : (item.original_path || null);
-  const pathLine = subPath
-    ? `<div class="file-path" title="${escAttr(subPath)}">${type === 'trash' ? '↩ ' : ''}${escHtml(subPath)}</div>`
-    : '';
-
-  let actions = '';
-  if (type === 'orphan') {
-    actions = `<button class="btn btn-warning" onclick="moveOne('${pathAttr}')">Move to Trash</button>`;
-  } else {
-    actions = `
-      <button class="btn btn-success" onclick="restoreOne('${pathAttr}')">Restore</button>
-      <button class="btn btn-danger btn-ghost" onclick="deleteOne('${pathAttr}')">Delete</button>
-    `;
-  }
-
-  return `
-    <div class="file-row">
-      <div class="file-icon">${icon}</div>
-      <div class="file-info">
-        <div class="file-name" title="${escAttr(item.name)}">${escHtml(item.name)}</div>
-        <div class="file-meta">
-          <span>${escHtml(item.size_human)}</span>
-          <span title="Last accessed">⏱ ${accessed}</span>
-        </div>
-        ${pathLine}
-      </div>
-      <div class="file-actions">${actions}</div>
-    </div>
-  `;
+async function moveSelected() {
+  const paths = [...selectedPaths];
+  if (!paths.length) return;
+  setLoading(true);
+  try {
+    const res = await apiFetch('/api/orphans/move', 'POST', { paths });
+    const ok = res.moved?.length ?? 0, fail = res.errors?.length ?? 0;
+    showToast(`Moved ${ok}${fail ? `, ${fail} failed` : ''}`, fail ? 'error' : 'success');
+    clearSelection();
+    await Promise.all([loadOrphans(), refreshStatus()]);
+  } catch (e) { showToast(e.message, 'error'); }
+  finally { setLoading(false); }
 }
 
-function formatAge(date) {
-  const secs = Math.floor((Date.now() - date.getTime()) / 1000);
-  if (secs < 60) return 'just now';
-  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
-  if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
-  return `${Math.floor(secs / 86400)}d ago`;
+async function ignoreSelected() {
+  const paths = [...selectedPaths];
+  if (!paths.length) return;
+  setLoading(true);
+  try {
+    await apiFetch('/api/ignore/add', 'POST', { paths });
+    showToast(`Ignored ${paths.length} item${paths.length !== 1 ? 's' : ''}`, 'success');
+    clearSelection();
+    await Promise.all([loadOrphans(), refreshStatus()]);
+  } catch (e) { showToast(e.message, 'error'); }
+  finally { setLoading(false); }
+}
+
+async function restoreSelected() {
+  const paths = [...selectedPaths];
+  if (!paths.length) return;
+  setLoading(true);
+  try {
+    const res = await apiFetch('/api/trash/restore', 'POST', { paths });
+    const ok = res.restored?.length ?? 0, fail = res.errors?.length ?? 0;
+    showToast(`Restored ${ok}${fail ? `, ${fail} failed` : ''}`, fail ? 'error' : 'success');
+    clearSelection();
+    await Promise.all([loadTrash(), refreshStatus()]);
+  } catch (e) { showToast(e.message, 'error'); }
+  finally { setLoading(false); }
+}
+
+async function deleteSelected() {
+  const paths = [...selectedPaths];
+  if (!paths.length) return;
+  confirm('Delete Selected', `Permanently delete ${paths.length} item${paths.length !== 1 ? 's' : ''}?`, async () => {
+    setLoading(true);
+    try {
+      const res = await apiFetch('/api/trash/delete', 'POST', { paths });
+      const ok = res.deleted?.length ?? 0, fail = res.errors?.length ?? 0;
+      showToast(`Deleted ${ok}${fail ? `, ${fail} failed` : ''}`, fail ? 'error' : 'success');
+      clearSelection();
+      await Promise.all([loadTrash(), refreshStatus()]);
+    } catch (e) { showToast(e.message, 'error'); }
+    finally { setLoading(false); }
+  });
 }
 
 // ── Modal ─────────────────────────────────────────────────────────────────────
 
-let _confirmCallback = null;
-
 function confirm(title, body, cb) {
   document.getElementById('modal-title').textContent = title;
   document.getElementById('modal-body').textContent = body;
-  _confirmCallback = cb;
   const btn = document.getElementById('modal-confirm-btn');
   btn.onclick = () => { closeModal(); cb(); };
   btn.className = title.toLowerCase().includes('delete') ? 'btn btn-danger' : 'btn btn-warning';
   btn.textContent = title.toLowerCase().includes('restore') ? 'Restore' : 'Confirm';
   document.getElementById('modal-backdrop').classList.add('open');
 }
-
-function closeModal() {
-  document.getElementById('modal-backdrop').classList.remove('open');
-  _confirmCallback = null;
-}
+function closeModal() { document.getElementById('modal-backdrop').classList.remove('open'); }
 
 // ── Toast ─────────────────────────────────────────────────────────────────────
 
-let _toastTimer = null;
-
+let _toastTimer;
 function showToast(msg, type = 'info') {
   const el = document.getElementById('toast');
   el.textContent = msg;
   el.className = `toast ${type} show`;
-  if (_toastTimer) clearTimeout(_toastTimer);
-  _toastTimer = setTimeout(() => { el.classList.remove('show'); }, 3000);
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
+function setListLoading(id, msg) {
+  document.getElementById(id).innerHTML =
+    `<div class="loading"><span class="spinner"></span>${msg}</div>`;
+}
+
 async function apiFetch(url, method = 'GET', body = null) {
   const opts = { method, headers: {} };
-  if (body !== null) {
-    opts.headers['Content-Type'] = 'application/json';
-    opts.body = JSON.stringify(body);
-  }
+  if (body !== null) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
   const res = await fetch(url, opts);
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
 }
 
-function escHtml(str) {
-  return String(str ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+function escHtml(s) {
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
-
-function escAttr(str) {
-  return String(str ?? '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
-}
+function escAttr(s) { return String(s ?? '').replace(/'/g,"\\'").replace(/"/g,'&quot;'); }
 
 function setLoading(on) {
   document.querySelectorAll('.btn').forEach(b => b.disabled = on);
+}
+
+function formatAge(date) {
+  const s = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s/60)}m ago`;
+  if (s < 86400) return `${Math.floor(s/3600)}h ago`;
+  return `${Math.floor(s/86400)}d ago`;
+}
+
+function fmtSize(b) {
+  for (const u of ['B','KB','MB','GB','TB']) {
+    if (b < 1024) return `${b.toFixed(1)} ${u}`;
+    b /= 1024;
+  }
+  return `${b.toFixed(1)} PB`;
 }

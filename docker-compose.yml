@@ -12,6 +12,9 @@ services:
       #- QBIT_PASSWORD=adminadmin
       - DOWNLOADS_DIR=/downloads
       - TRASH_DIR=/downloads/.qbit-trash
+      - MIN_ORPHAN_AGE_DAYS=0      # skip files modified within this many days (0 = off)
+      - AUTO_TRASH_DAYS=0          # auto-move to trash after N days orphaned (0 = off)
+      - WEBHOOK_URL=               # POST here when new orphans found (leave blank to disable)
     volumes:
       - /your/downloads:/downloads
     restart: unless-stopped

@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 import config
 
@@ -63,7 +64,6 @@ def _entry_info(path, downloads_root):
 
 
 def _is_protected(entry, protected_paths):
-    """True if the entry itself is a protected path."""
     candidates = {str(entry)}
     if not entry.is_symlink():
         try:
@@ -74,20 +74,30 @@ def _is_protected(entry, protected_paths):
     return bool(candidates & protected_paths)
 
 
+def _is_ignored(entry, ignore_paths):
+    if not ignore_paths:
+        return False
+    s = str(entry)
+    for ig in ignore_paths:
+        if s == ig or s.startswith(ig.rstrip("/") + "/"):
+            return True
+    return False
+
+
 def _has_protected_descendant(directory, protected_paths):
-    """True if any path inside directory is protected."""
     prefix = str(directory).rstrip("/") + "/"
     return any(p.startswith(prefix) for p in protected_paths)
 
 
-def _scan_dir(directory, protected_paths, trash, downloads_root, results):
+def _scan_dir(directory, protected_paths, trash, downloads_root, results,
+              ignore_paths, min_age_seconds):
     try:
         entries = sorted(directory.iterdir(), key=lambda e: e.name.lower())
     except PermissionError:
         return
 
+    now = time.time()
     for entry in entries:
-        # Skip hidden files and the trash folder
         if entry.name.startswith("."):
             continue
         try:
@@ -97,24 +107,33 @@ def _scan_dir(directory, protected_paths, trash, downloads_root, results):
             pass
 
         if _is_protected(entry, protected_paths):
-            # Owned by an active torrent — skip entirely
             continue
+
+        if _is_ignored(entry, ignore_paths):
+            continue
+
+        # Skip items whose mtime is newer than the minimum age threshold
+        if min_age_seconds:
+            try:
+                if now - entry.lstat().st_mtime < min_age_seconds:
+                    continue
+            except OSError:
+                pass
 
         if entry.is_dir() and not entry.is_symlink():
             if _has_protected_descendant(entry, protected_paths):
-                # Mix of owned and unowned content inside — recurse
-                _scan_dir(entry, protected_paths, trash, downloads_root, results)
+                _scan_dir(entry, protected_paths, trash, downloads_root, results,
+                          ignore_paths, min_age_seconds)
             else:
-                # Nothing inside is protected — whole folder is orphaned
                 results.append(_entry_info(str(entry), downloads_root))
         else:
             results.append(_entry_info(str(entry), downloads_root))
 
 
-def scan_orphans(protected_paths):
+def scan_orphans(protected_paths, ignore_paths=None, min_age_days=0):
     """
     Recursively scan DOWNLOADS_DIR and return entries not claimed by any active torrent.
-    Drills into container folders (e.g. 'movies/', 'complete/') to find orphans within them.
+    Skips items in ignore_paths and items newer than min_age_days.
     """
     downloads = Path(config.DOWNLOADS_DIR)
     trash = Path(config.TRASH_DIR).resolve()
@@ -124,7 +143,8 @@ def scan_orphans(protected_paths):
 
     orphans = []
     try:
-        _scan_dir(downloads, protected_paths, trash, downloads, orphans)
+        _scan_dir(downloads, protected_paths, trash, downloads, orphans,
+                  ignore_paths or set(), min_age_days * 86400)
     except Exception as e:
         return {"error": str(e)}
 

@@ -26,20 +26,26 @@ def init():
                 size_human    TEXT NOT NULL,
                 modified      INTEGER NOT NULL,
                 accessed      INTEGER NOT NULL DEFAULT 0,
-                is_dir        INTEGER NOT NULL
+                is_dir        INTEGER NOT NULL,
+                first_seen    INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS scan_state (
                 id        INTEGER PRIMARY KEY CHECK (id = 1),
                 last_scan INTEGER NOT NULL DEFAULT 0
             );
+            CREATE TABLE IF NOT EXISTS ignore_list (
+                path      TEXT PRIMARY KEY,
+                added_at  INTEGER NOT NULL
+            );
             INSERT OR IGNORE INTO scan_state (id, last_scan) VALUES (1, 0);
         """)
-    # Migrate existing databases that predate the accessed column
+    # Migrate older databases missing newer columns
     with _conn() as c:
-        try:
-            c.execute("ALTER TABLE orphan_cache ADD COLUMN accessed INTEGER NOT NULL DEFAULT 0")
-        except sqlite3.OperationalError:
-            pass  # column already exists
+        for col, defval in [("accessed", "0"), ("first_seen", "0")]:
+            try:
+                c.execute(f"ALTER TABLE orphan_cache ADD COLUMN {col} INTEGER NOT NULL DEFAULT {defval}")
+            except sqlite3.OperationalError:
+                pass
 
 
 def last_scan_time():
@@ -49,34 +55,55 @@ def last_scan_time():
 
 
 def cache_is_fresh():
-    age = int(time.time()) - last_scan_time()
-    return age < config.SCAN_CACHE_TTL
+    return (int(time.time()) - last_scan_time()) < config.SCAN_CACHE_TTL
 
 
 def get_cached_orphans():
     with _conn() as c:
         rows = c.execute(
-            "SELECT path, name, relative_path, size, size_human, modified, accessed, is_dir "
+            "SELECT path, name, relative_path, size, size_human, modified, accessed, is_dir, first_seen "
             "FROM orphan_cache ORDER BY size DESC"
         ).fetchall()
         return [dict(r) | {"is_dir": bool(r["is_dir"])} for r in rows]
 
 
 def set_orphan_cache(orphans):
+    """Replace cache contents, preserving first_seen for previously known paths.
+    Returns (timestamp, set_of_newly_found_paths)."""
     now = int(time.time())
     with _lock, _conn() as c:
+        existing = {
+            row["path"]: row["first_seen"] or now
+            for row in c.execute("SELECT path, first_seen FROM orphan_cache").fetchall()
+        }
+        prev_paths = set(existing)
+        new_paths = {o["path"] for o in orphans}
+
         c.execute("DELETE FROM orphan_cache")
         c.executemany(
-            "INSERT INTO orphan_cache VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO orphan_cache VALUES (?,?,?,?,?,?,?,?,?)",
             [
                 (o["path"], o["name"], o["relative_path"],
                  o["size"], o["size_human"], o["modified"],
-                 o.get("accessed", 0), int(o["is_dir"]))
+                 o.get("accessed", 0), int(o["is_dir"]),
+                 existing.get(o["path"], now))
                 for o in orphans
             ],
         )
         c.execute("UPDATE scan_state SET last_scan = ? WHERE id = 1", (now,))
-    return now
+
+    return now, new_paths - prev_paths
+
+
+def get_auto_trash_candidates():
+    if not config.AUTO_TRASH_DAYS:
+        return []
+    cutoff = int(time.time()) - config.AUTO_TRASH_DAYS * 86400
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT path FROM orphan_cache WHERE first_seen > 0 AND first_seen <= ?", (cutoff,)
+        ).fetchall()
+        return [r["path"] for r in rows]
 
 
 def remove_from_cache(path):
@@ -87,3 +114,26 @@ def remove_from_cache(path):
 def invalidate():
     with _conn() as c:
         c.execute("UPDATE scan_state SET last_scan = 0 WHERE id = 1")
+
+
+# ── Ignore list ───────────────────────────────────────────────────────────────
+
+def get_ignore_list():
+    with _conn() as c:
+        rows = c.execute("SELECT path, added_at FROM ignore_list ORDER BY path").fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_ignore_paths():
+    with _conn() as c:
+        return {r["path"] for r in c.execute("SELECT path FROM ignore_list").fetchall()}
+
+
+def add_to_ignore(path):
+    with _conn() as c:
+        c.execute("INSERT OR REPLACE INTO ignore_list VALUES (?, ?)", (path, int(time.time())))
+
+
+def remove_from_ignore(path):
+    with _conn() as c:
+        c.execute("DELETE FROM ignore_list WHERE path = ?", (path,))
