@@ -201,6 +201,10 @@ function renderJobsPanel(jobs) {
 
     const fraction = hasCount ? `${done} / ${total}` : '—';
 
+    const currentFile = (!isQueued && job.current_file)
+      ? `<div class="job-current-file" title="${escAttr(job.current_file)}">${escHtml(_truncateFilename(job.current_file, 38))}</div>`
+      : '';
+
     return `<div class="job-item">
       <div class="job-item-label">
         <span>${escHtml(label)}</span>
@@ -212,6 +216,7 @@ function renderJobsPanel(jobs) {
       <div class="job-progress-track">
         <div class="job-progress-fill" style="width:${pct}%"></div>
       </div>
+      ${currentFile}
       ${etaHtml}
     </div>`;
   }).join('');
@@ -236,6 +241,12 @@ async function cancelAllJobs() {
     showToast('All jobs cancelled', 'success');
     await Promise.all([loadOrphans(), loadTrash(), refreshStatus()]);
   } catch (e) { showToast(e.message, 'error'); }
+}
+
+function _truncateFilename(name, max) {
+  if (name.length <= max) return name;
+  const ext = name.includes('.') ? name.slice(name.lastIndexOf('.')) : '';
+  return name.slice(0, max - ext.length - 1) + '…' + ext;
 }
 
 function _fmtDuration(s) {

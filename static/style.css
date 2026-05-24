@@ -121,6 +121,11 @@ header {
   height: 100%; background: var(--accent);
   border-radius: 2px; transition: width 0.4s ease;
 }
+.job-current-file {
+  font-size: 0.72rem; color: var(--text-muted); margin-bottom: 0.15rem;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-family: monospace;
+}
 .job-eta { font-size: 0.72rem; color: var(--text-muted); }
 
 /* DISK BAR */

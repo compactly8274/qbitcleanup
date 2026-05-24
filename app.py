@@ -62,6 +62,11 @@ def _execute_job(job):
                 break
             clean_cache = False
             try:
+                db.update_job_current_file(job_id, p.split("/")[-1])
+            except Exception:
+                pass
+            clean_cache = False
+            try:
                 dest = trash_mod.move_to_trash(p)
                 moved.append({"from": p, "to": dest})
                 clean_cache = True
@@ -86,6 +91,10 @@ def _execute_job(job):
             if db.is_job_cancelled(job_id):
                 break
             try:
+                db.update_job_current_file(job_id, p.split("/")[-1])
+            except Exception:
+                pass
+            try:
                 dest = trash_mod.restore(p)
                 restored.append({"from": p, "to": dest})
             except FileNotFoundError:
@@ -103,6 +112,10 @@ def _execute_job(job):
         for i, p in enumerate(paths):
             if db.is_job_cancelled(job_id):
                 break
+            try:
+                db.update_job_current_file(job_id, p.split("/")[-1])
+            except Exception:
+                pass
             try:
                 trash_mod.delete(p)
                 deleted.append(p)
