@@ -91,6 +91,9 @@ You will also need to add the Docker bridge subnet (typically `172.17.0.0/16`) t
 | `TRASH_DIR` | `/downloads/.qbit-trash` | Where orphans are moved for review |
 | `DB_PATH` | `/downloads/.qbitcleanup.db` | SQLite cache database (on the mounted volume so it persists) |
 | `SCAN_CACHE_TTL` | `604800` | Seconds before a cached scan result is considered stale (default: 1 week) |
+| `MIN_ORPHAN_AGE_DAYS` | `0` | Exclude files modified within this many days (0 = off) |
+| `AUTO_TRASH_DAYS` | `0` | Auto-move orphans to trash after being seen this many days (0 = off) |
+| `WEBHOOK_URL` | *(empty)* | URL to POST when new orphans are found after a rescan |
 
 ## API Endpoints
 
