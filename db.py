@@ -46,7 +46,10 @@ def init():
                 status     TEXT NOT NULL DEFAULT 'queued',
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
-                result     TEXT
+                result     TEXT,
+                total      INTEGER NOT NULL DEFAULT 0,
+                progress   INTEGER NOT NULL DEFAULT 0,
+                started_at INTEGER NOT NULL DEFAULT 0
             );
             INSERT OR IGNORE INTO scan_state (id, last_scan) VALUES (1, 0);
         """)
@@ -55,6 +58,11 @@ def init():
         for col, defval in [("accessed", "0"), ("first_seen", "0")]:
             try:
                 c.execute(f"ALTER TABLE orphan_cache ADD COLUMN {col} INTEGER NOT NULL DEFAULT {defval}")
+            except sqlite3.OperationalError:
+                pass
+        for col, defval in [("total", "0"), ("progress", "0"), ("started_at", "0")]:
+            try:
+                c.execute(f"ALTER TABLE jobs ADD COLUMN {col} INTEGER NOT NULL DEFAULT {defval}")
             except sqlite3.OperationalError:
                 pass
 
@@ -157,8 +165,9 @@ def enqueue_job(job_type, paths):
     now = int(time.time())
     with _conn() as c:
         c.execute(
-            "INSERT INTO jobs VALUES (?,?,?,?,?,?,?)",
-            (job_id, job_type, json.dumps({"paths": paths}), "queued", now, now, None),
+            "INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (job_id, job_type, json.dumps({"paths": paths}), "queued", now, now, None,
+             len(paths), 0, 0),
         )
     return job_id
 
@@ -173,10 +182,19 @@ def claim_next_job():
                 return None
             now = int(time.time())
             c.execute(
-                "UPDATE jobs SET status='running', updated_at=? WHERE id=?",
-                (now, row["id"]),
+                "UPDATE jobs SET status='running', updated_at=?, started_at=? WHERE id=?",
+                (now, now, row["id"]),
             )
             return dict(row)
+
+
+def update_job_progress(job_id, done):
+    now = int(time.time())
+    with _conn() as c:
+        c.execute(
+            "UPDATE jobs SET progress=?, updated_at=? WHERE id=?",
+            (done, now, job_id),
+        )
 
 
 def complete_job(job_id, result):
@@ -211,7 +229,7 @@ def get_job(job_id):
 def get_pending_jobs():
     with _conn() as c:
         rows = c.execute(
-            "SELECT id, type, status, created_at FROM jobs "
+            "SELECT id, type, status, created_at, started_at, total, progress FROM jobs "
             "WHERE status IN ('queued','running') ORDER BY created_at"
         ).fetchall()
         return [dict(r) for r in rows]
