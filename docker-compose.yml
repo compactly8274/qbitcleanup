@@ -2,8 +2,7 @@ services:
   qbit-cleanup:
     image: ghcr.io/compactly8274/qbit-cleanup:latest
     build: .
-    ports:
-      - "5000:5000"
+    network_mode: host   # shares host network so qBittorrent whitelist sees LAN IP, not Docker bridge
     environment:
       - QBIT_HOST=http://localhost
       - QBIT_PORT=8080
@@ -14,3 +13,4 @@ services:
     volumes:
       - /your/downloads:/downloads
     restart: unless-stopped
+    # app listens on host port 5000 — no ports: mapping needed with network_mode: host
