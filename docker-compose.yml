@@ -1,0 +1,16 @@
+services:
+  qbit-cleanup:
+    image: compactly8274/qbit-cleanup:latest
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      - QBIT_HOST=http://localhost
+      - QBIT_PORT=8080
+      - QBIT_USERNAME=admin
+      - QBIT_PASSWORD=adminadmin
+      - DOWNLOADS_DIR=/downloads
+      - TRASH_DIR=/downloads/.qbit-trash
+    volumes:
+      - /your/downloads:/downloads
+    restart: unless-stopped
