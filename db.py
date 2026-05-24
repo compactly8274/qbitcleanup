@@ -1,6 +1,8 @@
+import json
 import sqlite3
 import threading
 import time
+import uuid
 from pathlib import Path
 import config
 
@@ -36,6 +38,15 @@ def init():
             CREATE TABLE IF NOT EXISTS ignore_list (
                 path      TEXT PRIMARY KEY,
                 added_at  INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS jobs (
+                id         TEXT PRIMARY KEY,
+                type       TEXT NOT NULL,
+                payload    TEXT NOT NULL,
+                status     TEXT NOT NULL DEFAULT 'queued',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                result     TEXT
             );
             INSERT OR IGNORE INTO scan_state (id, last_scan) VALUES (1, 0);
         """)
@@ -137,3 +148,79 @@ def add_to_ignore(path):
 def remove_from_ignore(path):
     with _conn() as c:
         c.execute("DELETE FROM ignore_list WHERE path = ?", (path,))
+
+
+# ── Job queue ─────────────────────────────────────────────────────────────────
+
+def enqueue_job(job_type, paths):
+    job_id = str(uuid.uuid4())
+    now = int(time.time())
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO jobs VALUES (?,?,?,?,?,?,?)",
+            (job_id, job_type, json.dumps({"paths": paths}), "queued", now, now, None),
+        )
+    return job_id
+
+
+def claim_next_job():
+    with _lock:
+        with _conn() as c:
+            row = c.execute(
+                "SELECT * FROM jobs WHERE status='queued' ORDER BY created_at LIMIT 1"
+            ).fetchone()
+            if not row:
+                return None
+            now = int(time.time())
+            c.execute(
+                "UPDATE jobs SET status='running', updated_at=? WHERE id=?",
+                (now, row["id"]),
+            )
+            return dict(row)
+
+
+def complete_job(job_id, result):
+    now = int(time.time())
+    with _conn() as c:
+        c.execute(
+            "UPDATE jobs SET status='done', updated_at=?, result=? WHERE id=?",
+            (now, json.dumps(result), job_id),
+        )
+
+
+def fail_job(job_id, error):
+    now = int(time.time())
+    with _conn() as c:
+        c.execute(
+            "UPDATE jobs SET status='error', updated_at=?, result=? WHERE id=?",
+            (now, json.dumps({"error": error}), job_id),
+        )
+
+
+def get_job(job_id):
+    with _conn() as c:
+        row = c.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        if d.get("result"):
+            d["result"] = json.loads(d["result"])
+        return d
+
+
+def get_pending_jobs():
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT id, type, status, created_at FROM jobs "
+            "WHERE status IN ('queued','running') ORDER BY created_at"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def prune_jobs():
+    cutoff = int(time.time()) - 3600
+    with _conn() as c:
+        c.execute(
+            "DELETE FROM jobs WHERE status IN ('done','error') AND updated_at < ?",
+            (cutoff,),
+        )
