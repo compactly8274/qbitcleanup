@@ -14,7 +14,9 @@ def _get_client():
             VERIFY_WEBUI_CERTIFICATE=False,
         )
         if config.QBIT_API_KEY:
-            kwargs["api_key"] = config.QBIT_API_KEY
+            # qBittorrent 5.0+ API key sent as X-Api-Key header; works with any
+            # library version unlike the api_key constructor arg added later
+            kwargs["EXTRA_HEADERS"] = {"X-Api-Key": config.QBIT_API_KEY}
         else:
             kwargs["username"] = config.QBIT_USERNAME
             kwargs["password"] = config.QBIT_PASSWORD
