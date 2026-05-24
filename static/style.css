@@ -143,6 +143,19 @@ main {
   margin-bottom: 1rem;
 }
 
+/* SORT SELECT */
+.sort-select {
+  margin-left: auto;
+  padding: 0.45rem 0.6rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.sort-select:focus { outline: 1px solid var(--accent); }
+
 /* BUTTONS */
 .btn {
   padding: 0.45rem 0.9rem;

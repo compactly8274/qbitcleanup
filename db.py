@@ -25,6 +25,7 @@ def init():
                 size          INTEGER NOT NULL,
                 size_human    TEXT NOT NULL,
                 modified      INTEGER NOT NULL,
+                accessed      INTEGER NOT NULL DEFAULT 0,
                 is_dir        INTEGER NOT NULL
             );
             CREATE TABLE IF NOT EXISTS scan_state (
@@ -33,6 +34,12 @@ def init():
             );
             INSERT OR IGNORE INTO scan_state (id, last_scan) VALUES (1, 0);
         """)
+    # Migrate existing databases that predate the accessed column
+    with _conn() as c:
+        try:
+            c.execute("ALTER TABLE orphan_cache ADD COLUMN accessed INTEGER NOT NULL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # column already exists
 
 
 def last_scan_time():
@@ -49,8 +56,8 @@ def cache_is_fresh():
 def get_cached_orphans():
     with _conn() as c:
         rows = c.execute(
-            "SELECT path, name, relative_path, size, size_human, modified, is_dir "
-            "FROM orphan_cache ORDER BY relative_path"
+            "SELECT path, name, relative_path, size, size_human, modified, accessed, is_dir "
+            "FROM orphan_cache ORDER BY size DESC"
         ).fetchall()
         return [dict(r) | {"is_dir": bool(r["is_dir"])} for r in rows]
 
@@ -60,10 +67,11 @@ def set_orphan_cache(orphans):
     with _lock, _conn() as c:
         c.execute("DELETE FROM orphan_cache")
         c.executemany(
-            "INSERT INTO orphan_cache VALUES (?,?,?,?,?,?,?)",
+            "INSERT INTO orphan_cache VALUES (?,?,?,?,?,?,?,?)",
             [
                 (o["path"], o["name"], o["relative_path"],
-                 o["size"], o["size_human"], o["modified"], int(o["is_dir"]))
+                 o["size"], o["size_human"], o["modified"],
+                 o.get("accessed", 0), int(o["is_dir"]))
                 for o in orphans
             ],
         )

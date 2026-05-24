@@ -45,6 +45,7 @@ def _entry_info(path, downloads_root):
             "size": size,
             "size_human": _format_size(size),
             "modified": int(st.st_mtime),
+            "accessed": int(st.st_atime),
             "is_dir": p.is_dir() and not p.is_symlink(),
         }
     except OSError as e:
@@ -55,6 +56,7 @@ def _entry_info(path, downloads_root):
             "size": 0,
             "size_human": "0 B",
             "modified": 0,
+            "accessed": 0,
             "is_dir": False,
             "error": str(e),
         }

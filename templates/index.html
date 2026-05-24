@@ -41,6 +41,12 @@
         <button class="btn btn-secondary" id="btn-refresh-orphans" onclick="loadOrphans(true)">
           Re-scan
         </button>
+        <select class="sort-select" id="orphan-sort" onchange="applySort('orphans')">
+          <option value="size-desc">Size ↓</option>
+          <option value="size-asc">Size ↑</option>
+          <option value="accessed-desc">Last Accessed ↓</option>
+          <option value="accessed-asc">Last Accessed ↑</option>
+        </select>
       </div>
       <div class="list-container" id="orphans-list">
         <div class="empty-state" id="orphans-empty">
@@ -62,6 +68,12 @@
         <button class="btn btn-secondary" id="btn-refresh-trash" onclick="loadTrash()">
           Refresh
         </button>
+        <select class="sort-select" id="trash-sort" onchange="applySort('trash')">
+          <option value="size-desc">Size ↓</option>
+          <option value="size-asc">Size ↑</option>
+          <option value="accessed-desc">Last Accessed ↓</option>
+          <option value="accessed-asc">Last Accessed ↑</option>
+        </select>
       </div>
       <div class="list-container" id="trash-list">
         <div class="empty-state" id="trash-empty">
