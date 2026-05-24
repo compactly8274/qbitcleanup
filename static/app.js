@@ -57,7 +57,24 @@ function setBadge(tab, count) {
   if (el) el.textContent = count;
 }
 
+// ── Sorting ───────────────────────────────────────────────────────────────────
+
+function sortedData(data, selectId) {
+  const val = document.getElementById(selectId)?.value ?? 'size-desc';
+  const [field, dir] = val.split('-');
+  const key = field === 'size' ? 'size' : 'accessed';
+  const asc = dir === 'asc';
+  return [...data].sort((a, b) => asc ? a[key] - b[key] : b[key] - a[key]);
+}
+
+function applySort(tab) {
+  if (tab === 'orphans') renderOrphans(_lastOrphanRes);
+  else renderTrash();
+}
+
 // ── Orphans ───────────────────────────────────────────────────────────────────
+
+let _lastOrphanRes = null;
 
 async function loadOrphans(force = false) {
   const list = document.getElementById('orphans-list');
@@ -66,6 +83,7 @@ async function loadOrphans(force = false) {
     const url = force ? '/api/orphans?refresh=true' : '/api/orphans';
     const res = await apiFetch(url);
     orphansData = res.orphans ?? [];
+    _lastOrphanRes = res;
     renderOrphans(res);
     setBadge('orphans', orphansData.length);
   } catch (err) {
@@ -90,7 +108,7 @@ function renderOrphans(res) {
     list.innerHTML = header + '<div class="empty-state"><div class="empty-icon">✓</div><div>No orphaned files found</div></div>';
     return;
   }
-  list.innerHTML = header + orphansData.map(item => fileRow(item, 'orphan')).join('');
+  list.innerHTML = header + sortedData(orphansData, 'orphan-sort').map(item => fileRow(item, 'orphan')).join('');
 }
 
 async function moveOne(path) {
@@ -149,7 +167,7 @@ function renderTrash() {
     list.innerHTML = '<div class="empty-state"><div class="empty-icon">🗑</div><div>Trash is empty</div></div>';
     return;
   }
-  list.innerHTML = trashData.map(item => fileRow(item, 'trash')).join('');
+  list.innerHTML = sortedData(trashData, 'trash-sort').map(item => fileRow(item, 'trash')).join('');
 }
 
 async function restoreOne(path) {
@@ -234,7 +252,7 @@ async function deleteAll() {
 
 function fileRow(item, type) {
   const icon = item.is_dir ? '📁' : '📄';
-  const date = item.modified ? new Date(item.modified * 1000).toLocaleDateString() : '—';
+  const accessed = item.accessed ? new Date(item.accessed * 1000).toLocaleDateString() : '—';
   const pathAttr = escAttr(type === 'trash' ? item.trash_path : item.path);
 
   const subPath = type === 'orphan'
@@ -261,7 +279,7 @@ function fileRow(item, type) {
         <div class="file-name" title="${escAttr(item.name)}">${escHtml(item.name)}</div>
         <div class="file-meta">
           <span>${escHtml(item.size_human)}</span>
-          <span>${date}</span>
+          <span title="Last accessed">⏱ ${accessed}</span>
         </div>
         ${pathLine}
       </div>

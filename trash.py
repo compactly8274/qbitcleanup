@@ -75,9 +75,12 @@ def list_trash():
 
         size = _dir_size(entry) if entry.is_dir() else _file_size(entry)
         try:
-            mtime = int(entry.stat().st_mtime)
+            st = entry.stat()
+            mtime = int(st.st_mtime)
+            atime = int(st.st_atime)
         except OSError:
             mtime = 0
+            atime = 0
 
         items.append({
             "trash_path": str(entry),
@@ -86,6 +89,7 @@ def list_trash():
             "size": size,
             "size_human": _format_size(size),
             "modified": mtime,
+            "accessed": atime,
             "is_dir": entry.is_dir() and not entry.is_symlink(),
         })
 
