@@ -182,23 +182,32 @@ function renderJobsPanel(jobs) {
     const label = JOB_LABELS[job.type] || job.type;
     const total = job.total || 0;
     const done = job.progress || 0;
-    const pct = total > 0 ? Math.round(done / total * 100) : 0;
+    const hasCount = total > 0;
+    const pct = hasCount ? Math.round(done / total * 100) : 0;
     const isQueued = job.status === 'queued';
+    const jid = escAttr(job.id);
 
     let etaHtml = '';
-    if (!isQueued && job.started_at && done > 0 && total > 0) {
+    if (!isQueued && job.started_at && done > 0 && hasCount) {
       const elapsed = Date.now() / 1000 - job.started_at;
       const rate = done / elapsed;
       const remaining = (total - done) / rate;
       etaHtml = `<div class="job-eta">~${_fmtDuration(remaining)} remaining</div>`;
     } else if (isQueued) {
       etaHtml = `<div class="job-eta">queued</div>`;
+    } else if (!hasCount) {
+      etaHtml = `<div class="job-eta">processing…</div>`;
     }
+
+    const fraction = hasCount ? `${done} / ${total}` : '—';
 
     return `<div class="job-item">
       <div class="job-item-label">
         <span>${escHtml(label)}</span>
-        <span class="job-item-fraction">${done} / ${total}</span>
+        <div style="display:flex;align-items:center;gap:0.5rem">
+          <span class="job-item-fraction">${fraction}</span>
+          <button class="job-cancel-btn" onclick="cancelJob('${jid}')" title="Cancel">✕</button>
+        </div>
       </div>
       <div class="job-progress-track">
         <div class="job-progress-fill" style="width:${pct}%"></div>
@@ -206,6 +215,27 @@ function renderJobsPanel(jobs) {
       ${etaHtml}
     </div>`;
   }).join('');
+}
+
+async function cancelJob(jobId) {
+  try {
+    await apiFetch(`/api/jobs/${jobId}/cancel`, 'POST');
+    pendingJobs.delete(jobId);
+    updateJobsIndicator();
+    showToast('Job cancelled', 'success');
+    await Promise.all([loadOrphans(), loadTrash(), refreshStatus()]);
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function cancelAllJobs() {
+  try {
+    await apiFetch('/api/jobs/cancel', 'POST');
+    pendingJobs.clear();
+    closeJobsPanel();
+    updateJobsIndicator();
+    showToast('All jobs cancelled', 'success');
+    await Promise.all([loadOrphans(), loadTrash(), refreshStatus()]);
+  } catch (e) { showToast(e.message, 'error'); }
 }
 
 function _fmtDuration(s) {
@@ -217,6 +247,9 @@ function _fmtDuration(s) {
 
 function _handleJobDone(job, info) {
   const r = job.result || {};
+  if (job.status === 'cancelled') {
+    return; // already handled at cancel time
+  }
   if (job.status === 'error') {
     showToast(`Error: ${r.error || 'Unknown error'}`, 'error');
   } else {
