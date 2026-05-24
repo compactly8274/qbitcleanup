@@ -85,9 +85,6 @@ def _job_worker():
             time.sleep(1)
 
 
-threading.Thread(target=_job_worker, daemon=True, name="job-worker").start()
-
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _fresh_scan():
