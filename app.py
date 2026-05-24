@@ -129,7 +129,3 @@ def api_trash_delete():
             errors.append({"path": t, "error": str(e)})
 
     return jsonify({"deleted": deleted, "errors": errors})
-
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=False)
