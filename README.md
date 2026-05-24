@@ -17,7 +17,7 @@ A Dockerized web application for managing your qBittorrent downloads directory â
 # docker-compose.yml
 services:
   qbit-cleanup:
-    image: compactly8274/qbit-cleanup:latest
+    image: ghcr.io/compactly8274/qbit-cleanup:latest
     ports:
       - "5000:5000"
     environment:

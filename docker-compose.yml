@@ -1,6 +1,6 @@
 services:
   qbit-cleanup:
-    image: compactly8274/qbit-cleanup:latest
+    image: ghcr.io/compactly8274/qbit-cleanup:latest
     build: .
     ports:
       - "5000:5000"
