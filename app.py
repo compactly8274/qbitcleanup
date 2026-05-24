@@ -1,8 +1,14 @@
+import logging
 from flask import Flask, jsonify, request, render_template
 import config
 import qbit
 import scanner
 import trash as trash_mod
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
 app = Flask(__name__)
 
@@ -31,6 +37,7 @@ def api_status():
     return jsonify({
         "connected": status["connected"],
         "version": status["version"],
+        "error": status.get("error"),
         "orphan_count": orphan_count,
         "trash_count": trash_count,
         "downloads_dir": config.DOWNLOADS_DIR,
