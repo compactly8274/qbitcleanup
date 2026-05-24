@@ -168,6 +168,16 @@ main {
 .btn-ghost { background: transparent; color: var(--text-muted); border: 1px solid transparent; }
 .btn-ghost:hover:not(:disabled) { background: var(--surface2); color: var(--text); border-color: var(--border); }
 
+/* SCAN META */
+.scan-meta {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  padding: 0.3rem 0;
+  margin-bottom: 0.25rem;
+}
+.scan-cached { opacity: 0.7; }
+.scan-fresh { color: var(--success); }
+
 /* LIST */
 .list-container { display: flex; flex-direction: column; gap: 0.4rem; }
 
