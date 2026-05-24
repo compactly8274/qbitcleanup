@@ -65,6 +65,12 @@ def init():
                 c.execute(f"ALTER TABLE jobs ADD COLUMN {col} INTEGER NOT NULL DEFAULT {defval}")
             except sqlite3.OperationalError:
                 pass
+    # Reset jobs left in 'running' state from a previous session (e.g. container restart)
+    with _conn() as c:
+        c.execute(
+            "UPDATE jobs SET status='queued', updated_at=? WHERE status='running'",
+            (int(time.time()),),
+        )
 
 
 def last_scan_time():
