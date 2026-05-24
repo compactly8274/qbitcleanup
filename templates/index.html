@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>qBit Cleanup</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <div class="brand">
+        <span class="brand-icon">&#128465;</span>
+        <span class="brand-name">qBit Cleanup</span>
+      </div>
+      <div class="status-pill" id="status-pill">
+        <span class="status-dot" id="status-dot"></span>
+        <span id="status-text">Connecting…</span>
+      </div>
+    </div>
+  </header>
+
+  <nav class="tab-bar">
+    <button class="tab active" data-tab="orphans" id="tab-orphans">
+      Orphaned
+      <span class="badge" id="badge-orphans">0</span>
+    </button>
+    <button class="tab" data-tab="trash" id="tab-trash">
+      Trash
+      <span class="badge" id="badge-trash">0</span>
+    </button>
+  </nav>
+
+  <main>
+    <!-- ORPHANS VIEW -->
+    <section id="view-orphans" class="view active">
+      <div class="toolbar" id="toolbar-orphans">
+        <button class="btn btn-warning" id="btn-move-all" onclick="moveAll()">
+          Move All to Trash
+        </button>
+        <button class="btn btn-secondary" id="btn-refresh-orphans" onclick="loadOrphans()">
+          Refresh
+        </button>
+      </div>
+      <div class="list-container" id="orphans-list">
+        <div class="empty-state" id="orphans-empty">
+          <div class="empty-icon">&#10003;</div>
+          <div>No orphaned files found</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TRASH VIEW -->
+    <section id="view-trash" class="view">
+      <div class="toolbar" id="toolbar-trash">
+        <button class="btn btn-success" id="btn-restore-all" onclick="restoreAll()">
+          Restore All
+        </button>
+        <button class="btn btn-danger" id="btn-delete-all" onclick="deleteAll()">
+          Delete All
+        </button>
+        <button class="btn btn-secondary" id="btn-refresh-trash" onclick="loadTrash()">
+          Refresh
+        </button>
+      </div>
+      <div class="list-container" id="trash-list">
+        <div class="empty-state" id="trash-empty">
+          <div class="empty-icon">&#128465;</div>
+          <div>Trash is empty</div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- CONFIRM MODAL -->
+  <div class="modal-backdrop" id="modal-backdrop" onclick="closeModal()">
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="modal-title" id="modal-title">Confirm</div>
+      <div class="modal-body" id="modal-body"></div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-danger" id="modal-confirm-btn">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TOAST -->
+  <div class="toast" id="toast"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
