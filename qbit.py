@@ -1,89 +1,72 @@
-import requests
+import qbittorrentapi
 import config
 
-_session = None
+_client = None
 
 
-def _get_session():
-    global _session
-    if _session is None:
-        _session = requests.Session()
-    return _session
-
-
-def login():
-    s = _get_session()
-    try:
-        resp = s.post(
-            f"{config.QBIT_URL}/api/v2/auth/login",
-            data={"username": config.QBIT_USERNAME, "password": config.QBIT_PASSWORD},
-            timeout=5,
+def _get_client():
+    global _client
+    if _client is None:
+        _client = qbittorrentapi.Client(
+            host=config.QBIT_HOST,
+            port=config.QBIT_PORT,
+            username=config.QBIT_USERNAME,
+            password=config.QBIT_PASSWORD,
+            REQUESTS_ARGS={"timeout": 10},
+            VERIFY_WEBUI_CERTIFICATE=False,
         )
-        return resp.text == "Ok."
-    except requests.RequestException:
-        return False
+    return _client
 
 
 def get_status():
-    s = _get_session()
+    client = _get_client()
     try:
-        resp = s.get(f"{config.QBIT_URL}/api/v2/app/version", timeout=5)
-        if resp.status_code == 403:
-            if login():
-                resp = s.get(f"{config.QBIT_URL}/api/v2/app/version", timeout=5)
-        if resp.status_code == 200:
-            return {"connected": True, "version": resp.text}
-    except requests.RequestException:
-        pass
-    return {"connected": False, "version": None}
+        client.auth_log_in()
+        version = client.app.version
+        return {"connected": True, "version": version}
+    except qbittorrentapi.LoginFailed:
+        return {"connected": False, "version": None, "error": "Login failed — check credentials"}
+    except qbittorrentapi.APIConnectionError:
+        return {"connected": False, "version": None}
+    except Exception:
+        return {"connected": False, "version": None}
 
 
 def get_torrent_paths():
-    """Return a set of absolute paths claimed by active torrents."""
-    s = _get_session()
+    """Return a set of absolute paths claimed by active torrents, or None on error."""
+    client = _get_client()
     try:
-        resp = s.get(f"{config.QBIT_URL}/api/v2/torrents/info", timeout=10)
-        if resp.status_code == 403:
-            if login():
-                resp = s.get(f"{config.QBIT_URL}/api/v2/torrents/info", timeout=10)
-        if resp.status_code != 200:
-            return None
-        torrents = resp.json()
-    except requests.RequestException:
+        client.auth_log_in()
+        torrents = client.torrents_info()
+    except qbittorrentapi.LoginFailed:
+        return None
+    except qbittorrentapi.APIConnectionError:
+        return None
+    except Exception:
         return None
 
     paths = set()
     for t in torrents:
-        save_path = t.get("save_path", "").rstrip("/")
-        name = t.get("name", "")
-        content_path = t.get("content_path", "")
+        save_path = (t.save_path or "").rstrip("/")
+        name = t.name or ""
+        content_path = (t.content_path or "").rstrip("/")
 
-        # Add the torrent's root content path
         if content_path:
-            paths.add(content_path.rstrip("/"))
+            paths.add(content_path)
 
-        # Add individual file paths for multi-file torrents
-        files_resp = None
-        try:
-            files_resp = s.get(
-                f"{config.QBIT_URL}/api/v2/torrents/files",
-                params={"hash": t["hash"]},
-                timeout=10,
-            )
-        except requests.RequestException:
-            pass
-
-        if files_resp and files_resp.status_code == 200:
-            for f in files_resp.json():
-                full_path = f"{save_path}/{f['name']}"
-                paths.add(full_path)
-                # Also protect all parent directories up to save_path
-                parts = f["name"].split("/")
-                for i in range(1, len(parts)):
-                    paths.add(f"{save_path}/{'/'.join(parts[:i])}")
-
-        # Always protect the save_path/name directory
         if name and save_path:
             paths.add(f"{save_path}/{name}")
+
+        try:
+            files = client.torrents_files(torrent_hash=t.hash)
+            for f in files:
+                full_path = f"{save_path}/{f.name}"
+                paths.add(full_path)
+                # Protect all intermediate directories
+                parts = f.name.split("/")
+                for i in range(1, len(parts)):
+                    paths.add(f"{save_path}/{'/'.join(parts[:i])}")
+        except Exception:
+            pass
 
     return paths

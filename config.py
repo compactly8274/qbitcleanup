@@ -7,4 +7,3 @@ QBIT_PASSWORD = os.environ.get("QBIT_PASSWORD", "adminadmin")
 DOWNLOADS_DIR = os.environ.get("DOWNLOADS_DIR", "/downloads")
 TRASH_DIR = os.environ.get("TRASH_DIR", "/downloads/.qbit-trash")
 
-QBIT_URL = f"{QBIT_HOST}:{QBIT_PORT}"
