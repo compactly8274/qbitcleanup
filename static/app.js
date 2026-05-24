@@ -59,7 +59,7 @@ async function refreshStatus() {
     const text = document.getElementById('status-text');
     dot.className = 'status-dot ' + (d.connected ? 'connected' : 'disconnected');
     text.textContent = d.connected
-      ? `Connected${d.version ? ' v' + d.version : ''}`
+      ? `Connected${d.version ? ' ' + d.version : ''}`
       : (d.error ? `Offline: ${d.error}` : 'Offline');
 
     setBadge('orphans', d.orphan_count ?? 0);
