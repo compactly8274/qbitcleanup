@@ -22,8 +22,7 @@ services:
     environment:
       - QBIT_HOST=http://localhost
       - QBIT_PORT=8080
-      - QBIT_USERNAME=admin
-      - QBIT_PASSWORD=adminadmin
+      - QBIT_API_KEY=your_api_key_here
       - DOWNLOADS_DIR=/downloads
       - TRASH_DIR=/downloads/.qbit-trash
     volumes:
@@ -36,20 +35,39 @@ docker compose up -d
 # open http://<your-server-ip>:5000
 ```
 
-## Networking & qBittorrent Authentication
+## Authentication
+
+### API Key (qBittorrent 5.0+, recommended)
+
+1. In qBittorrent go to **Tools → Options → Web UI → API Key**
+2. Generate a key and copy it
+3. Set `QBIT_API_KEY` in your compose file
+
+### Username / Password (qBittorrent < 5.0, fallback)
+
+If you're running an older version that doesn't support API keys, use `QBIT_USERNAME` and `QBIT_PASSWORD` instead and omit `QBIT_API_KEY`.
+
+```yaml
+    environment:
+      - QBIT_API_KEY=        # leave blank or remove to use password auth
+      - QBIT_USERNAME=admin
+      - QBIT_PASSWORD=adminadmin
+```
+
+## Networking
 
 The container runs with `network_mode: host`, meaning it shares the host's network stack rather than getting its own Docker bridge IP.
 
-**Why this matters:** qBittorrent's WebUI has an IP whitelist (Tools → Options → Web UI → "Bypass authentication for clients on localhost" / allowed IPs). When a container runs on the default Docker bridge network its requests come from a `172.x.x.x` address which is typically not whitelisted. With `network_mode: host` the container makes requests from the host's LAN IP, which is already covered by your whitelist.
+**Why this matters:** qBittorrent's WebUI has an IP whitelist (Tools → Options → Web UI → allowed IPs). When a container runs on the default Docker bridge its requests come from a `172.x.x.x` address which is typically not whitelisted. With `network_mode: host` the container makes requests from the host's LAN IP, which is already covered by your whitelist.
 
 This also means:
-- `QBIT_HOST=http://localhost` works directly — no need to use the LAN IP
-- No `ports:` mapping is needed; the app binds to port `5000` on the host directly
+- `QBIT_HOST=http://localhost` works directly
+- No `ports:` mapping is needed — the app binds to port `5000` on the host directly
 - **Linux only** — `network_mode: host` has no effect on Docker Desktop for Mac/Windows (see below)
 
 ### Mac / Windows (Docker Desktop)
 
-Docker Desktop does not support `network_mode: host`. Instead, remove that line and use:
+Remove `network_mode: host` and add:
 
 ```yaml
     environment:
@@ -66,8 +84,9 @@ You will also need to add the Docker bridge subnet (typically `172.17.0.0/16`) t
 |---|---|---|
 | `QBIT_HOST` | `http://localhost` | qBittorrent WebUI host |
 | `QBIT_PORT` | `8080` | qBittorrent WebUI port |
-| `QBIT_USERNAME` | `admin` | WebUI username |
-| `QBIT_PASSWORD` | `adminadmin` | WebUI password |
+| `QBIT_API_KEY` | *(empty)* | API key — preferred auth for qBittorrent 5.0+ |
+| `QBIT_USERNAME` | *(empty)* | Username — fallback for qBittorrent < 5.0 |
+| `QBIT_PASSWORD` | *(empty)* | Password — fallback for qBittorrent < 5.0 |
 | `DOWNLOADS_DIR` | `/downloads` | Path to your downloads directory |
 | `TRASH_DIR` | `/downloads/.qbit-trash` | Where orphans are moved for review |
 
@@ -87,7 +106,7 @@ You will also need to add the Docker bridge subnet (typically `172.17.0.0/16`) t
 ```bash
 docker build -t qbit-cleanup .
 docker run --network host \
-  -e QBIT_HOST=http://localhost \
+  -e QBIT_API_KEY=your_api_key_here \
   -v /your/downloads:/downloads \
   qbit-cleanup
 ```
