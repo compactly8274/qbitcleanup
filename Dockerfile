@@ -7,7 +7,7 @@ RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py config.py db.py qbit.py scanner.py trash.py ./
+COPY *.py ./
 COPY templates/ templates/
 COPY static/ static/
 
