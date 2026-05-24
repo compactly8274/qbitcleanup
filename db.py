@@ -40,16 +40,17 @@ def init():
                 added_at  INTEGER NOT NULL
             );
             CREATE TABLE IF NOT EXISTS jobs (
-                id         TEXT PRIMARY KEY,
-                type       TEXT NOT NULL,
-                payload    TEXT NOT NULL,
-                status     TEXT NOT NULL DEFAULT 'queued',
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
-                result     TEXT,
-                total      INTEGER NOT NULL DEFAULT 0,
-                progress   INTEGER NOT NULL DEFAULT 0,
-                started_at INTEGER NOT NULL DEFAULT 0
+                id           TEXT PRIMARY KEY,
+                type         TEXT NOT NULL,
+                payload      TEXT NOT NULL,
+                status       TEXT NOT NULL DEFAULT 'queued',
+                created_at   INTEGER NOT NULL,
+                updated_at   INTEGER NOT NULL,
+                result       TEXT,
+                total        INTEGER NOT NULL DEFAULT 0,
+                progress     INTEGER NOT NULL DEFAULT 0,
+                started_at   INTEGER NOT NULL DEFAULT 0,
+                current_file TEXT
             );
             INSERT OR IGNORE INTO scan_state (id, last_scan) VALUES (1, 0);
         """)
@@ -65,6 +66,10 @@ def init():
                 c.execute(f"ALTER TABLE jobs ADD COLUMN {col} INTEGER NOT NULL DEFAULT {defval}")
             except sqlite3.OperationalError:
                 pass
+        try:
+            c.execute("ALTER TABLE jobs ADD COLUMN current_file TEXT")
+        except sqlite3.OperationalError:
+            pass
     # Reset jobs left in 'running' state from a previous session (e.g. container restart)
     with _conn() as c:
         c.execute(
@@ -171,9 +176,9 @@ def enqueue_job(job_type, paths):
     now = int(time.time())
     with _conn() as c:
         c.execute(
-            "INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (job_id, job_type, json.dumps({"paths": paths}), "queued", now, now, None,
-             len(paths), 0, 0),
+             len(paths), 0, 0, None),
         )
     return job_id
 
@@ -198,8 +203,17 @@ def update_job_progress(job_id, done):
     now = int(time.time())
     with _conn() as c:
         c.execute(
-            "UPDATE jobs SET progress=?, updated_at=? WHERE id=?",
+            "UPDATE jobs SET progress=?, updated_at=?, current_file=NULL WHERE id=?",
             (done, now, job_id),
+        )
+
+
+def update_job_current_file(job_id, filename):
+    now = int(time.time())
+    with _conn() as c:
+        c.execute(
+            "UPDATE jobs SET current_file=?, updated_at=? WHERE id=?",
+            (filename, now, job_id),
         )
 
 
@@ -235,7 +249,7 @@ def get_job(job_id):
 def get_pending_jobs():
     with _conn() as c:
         rows = c.execute(
-            "SELECT id, type, status, created_at, started_at, total, progress FROM jobs "
+            "SELECT id, type, status, created_at, started_at, total, progress, current_file FROM jobs "
             "WHERE status IN ('queued','running') ORDER BY created_at"
         ).fetchall()
         return [dict(r) for r in rows]
