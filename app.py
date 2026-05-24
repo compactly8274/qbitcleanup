@@ -1,5 +1,7 @@
+import json
 import logging
 import shutil
+import threading
 import time
 from flask import Flask, jsonify, request, render_template
 import config
@@ -20,8 +22,75 @@ with app.app_context():
     db.init()
 
 
+# ── Background job worker ─────────────────────────────────────────────────────
+
+def _execute_job(job):
+    payload = json.loads(job["payload"])
+    paths = payload.get("paths", [])
+    jtype = job["type"]
+
+    if jtype == "move_to_trash":
+        moved, errors = [], []
+        for p in paths:
+            try:
+                dest = trash_mod.move_to_trash(p)
+                db.remove_from_cache(p)
+                moved.append({"from": p, "to": dest})
+            except Exception as e:
+                errors.append({"path": p, "error": str(e)})
+        return {"moved": moved, "errors": errors}
+
+    if jtype == "restore":
+        restored, errors = [], []
+        for p in paths:
+            try:
+                dest = trash_mod.restore(p)
+                restored.append({"from": p, "to": dest})
+            except Exception as e:
+                errors.append({"path": p, "error": str(e)})
+        return {"restored": restored, "errors": errors}
+
+    if jtype == "delete":
+        deleted, errors = [], []
+        for p in paths:
+            try:
+                trash_mod.delete(p)
+                deleted.append(p)
+            except Exception as e:
+                errors.append({"path": p, "error": str(e)})
+        return {"deleted": deleted, "errors": errors}
+
+    raise ValueError(f"Unknown job type: {jtype}")
+
+
+def _job_worker():
+    while True:
+        try:
+            job = db.claim_next_job()
+            if job:
+                n = len(json.loads(job["payload"]).get("paths", []))
+                log.info("Job %s type=%s paths=%d", job["id"][:8], job["type"], n)
+                try:
+                    result = _execute_job(job)
+                    db.complete_job(job["id"], result)
+                    log.info("Job %s done", job["id"][:8])
+                except Exception as e:
+                    log.error("Job %s failed: %s", job["id"][:8], e)
+                    db.fail_job(job["id"], str(e))
+            else:
+                db.prune_jobs()
+                time.sleep(0.5)
+        except Exception as e:
+            log.error("Job worker crash: %s", e)
+            time.sleep(1)
+
+
+threading.Thread(target=_job_worker, daemon=True, name="job-worker").start()
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
 def _fresh_scan():
-    """Fetch torrent paths, scan filesystem, update cache. Returns (orphans, error)."""
     paths = qbit.get_torrent_paths()
     if paths is None:
         return None, "Failed to fetch torrent list from qBittorrent"
@@ -35,7 +104,6 @@ def _fresh_scan():
     _, newly_found = db.set_orphan_cache(result)
     log.info("Scan complete: %d orphan(s), %d new", len(result), len(newly_found))
 
-    # Auto-trash items that have been orphaned longer than AUTO_TRASH_DAYS
     if config.AUTO_TRASH_DAYS:
         for path in db.get_auto_trash_candidates():
             try:
@@ -45,7 +113,6 @@ def _fresh_scan():
             except Exception as e:
                 log.warning("Auto-trash failed for %s: %s", path, e)
 
-    # Webhook on new orphans
     if config.WEBHOOK_URL and newly_found:
         _fire_webhook(result, newly_found)
 
@@ -77,6 +144,8 @@ def _disk_info():
     except OSError:
         return {}
 
+
+# ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route("/")
 def index():
@@ -133,17 +202,8 @@ def api_orphans_move():
     data = request.get_json(silent=True) or {}
     paths = data.get("paths") or ([data["path"]] if data.get("path") else None)
     targets = paths if paths else [o["path"] for o in db.get_cached_orphans()]
-
-    moved, errors = [], []
-    for t in targets:
-        try:
-            dest = trash_mod.move_to_trash(t)
-            db.remove_from_cache(t)
-            moved.append({"from": t, "to": dest})
-        except Exception as e:
-            errors.append({"path": t, "error": str(e)})
-
-    return jsonify({"moved": moved, "errors": errors})
+    job_id = db.enqueue_job("move_to_trash", targets)
+    return jsonify({"job_id": job_id, "queued": True, "count": len(targets)})
 
 
 @app.route("/api/trash")
@@ -157,16 +217,8 @@ def api_trash_restore():
     paths = data.get("paths") or ([data["path"]] if data.get("path") else None)
     items = trash_mod.list_trash()
     targets = paths if paths else [i["trash_path"] for i in items]
-
-    restored, errors = [], []
-    for t in targets:
-        try:
-            dest = trash_mod.restore(t)
-            restored.append({"from": t, "to": dest})
-        except Exception as e:
-            errors.append({"path": t, "error": str(e)})
-
-    return jsonify({"restored": restored, "errors": errors})
+    job_id = db.enqueue_job("restore", targets)
+    return jsonify({"job_id": job_id, "queued": True, "count": len(targets)})
 
 
 @app.route("/api/trash/delete", methods=["POST"])
@@ -175,16 +227,21 @@ def api_trash_delete():
     paths = data.get("paths") or ([data["path"]] if data.get("path") else None)
     items = trash_mod.list_trash()
     targets = paths if paths else [i["trash_path"] for i in items]
+    job_id = db.enqueue_job("delete", targets)
+    return jsonify({"job_id": job_id, "queued": True, "count": len(targets)})
 
-    deleted, errors = [], []
-    for t in targets:
-        try:
-            trash_mod.delete(t)
-            deleted.append(t)
-        except Exception as e:
-            errors.append({"path": t, "error": str(e)})
 
-    return jsonify({"deleted": deleted, "errors": errors})
+@app.route("/api/jobs")
+def api_jobs():
+    return jsonify(db.get_pending_jobs())
+
+
+@app.route("/api/jobs/<job_id>")
+def api_job(job_id):
+    job = db.get_job(job_id)
+    if not job:
+        return jsonify({"error": "not found"}), 404
+    return jsonify(job)
 
 
 @app.route("/api/ignore")

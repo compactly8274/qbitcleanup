@@ -59,6 +59,23 @@ header {
 .status-dot.connected { background: var(--success); box-shadow: 0 0 6px var(--success); }
 .status-dot.disconnected { background: var(--danger); }
 
+/* JOBS INDICATOR */
+.jobs-indicator {
+  display: flex; align-items: center; gap: 0.35rem;
+  padding: 0.3rem 0.75rem;
+  border-radius: 999px;
+  background: var(--surface2);
+  border: 1px solid var(--accent);
+  font-size: 0.78rem; font-weight: 500; color: var(--accent);
+}
+.jobs-indicator::before {
+  content: '';
+  display: inline-block; width: 7px; height: 7px;
+  border: 1.5px solid var(--accent); border-top-color: transparent;
+  border-radius: 50%; animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
 /* DISK BAR */
 .disk-bar {
   max-width: 900px;

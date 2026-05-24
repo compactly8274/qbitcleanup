@@ -10,6 +10,10 @@ let lastOrphanRes = null;
 let selectedPaths = new Set();
 let groupingEnabled = false;
 
+// Job tracking
+let pendingJobs = new Map(); // job_id -> {type, tab}
+let jobPollTimer = null;
+
 const FILE_TYPES = {
   '📹 Video':    ['mkv','mp4','avi','mov','wmv','m4v','mpg','mpeg','ts','m2ts','flv','webm','vob'],
   '🎵 Audio':    ['mp3','flac','wav','aac','ogg','opus','m4a','wma'],
@@ -86,6 +90,76 @@ function renderDiskBar(disk, orphanSize) {
 function setBadge(tab, n) {
   const el = document.getElementById(`badge-${tab}`);
   if (el) el.textContent = n;
+}
+
+// ── Job queue polling ─────────────────────────────────────────────────────────
+
+function trackJob(jobId, type, tab) {
+  pendingJobs.set(jobId, { type, tab });
+  updateJobsIndicator();
+  if (!jobPollTimer) {
+    jobPollTimer = setInterval(pollJobs, 1500);
+  }
+}
+
+async function pollJobs() {
+  if (!pendingJobs.size) {
+    clearInterval(jobPollTimer);
+    jobPollTimer = null;
+    updateJobsIndicator();
+    return;
+  }
+  try {
+    const active = await apiFetch('/api/jobs');
+    const activeIds = new Set(active.map(j => j.id));
+    const completed = [...pendingJobs.keys()].filter(id => !activeIds.has(id));
+    for (const id of completed) {
+      const info = pendingJobs.get(id);
+      pendingJobs.delete(id);
+      try {
+        const job = await apiFetch(`/api/jobs/${id}`);
+        _handleJobDone(job, info);
+      } catch {
+        _refreshAfterJob(info.tab);
+      }
+    }
+    updateJobsIndicator();
+  } catch { /* ignore poll errors */ }
+}
+
+function _handleJobDone(job, info) {
+  const r = job.result || {};
+  if (job.status === 'error') {
+    showToast(`Error: ${r.error || 'Unknown error'}`, 'error');
+  } else {
+    let msg = '';
+    if (job.type === 'move_to_trash') {
+      const ok = r.moved?.length ?? 0, fail = r.errors?.length ?? 0;
+      msg = `Moved ${ok} to trash${fail ? `, ${fail} failed` : ''}`;
+    } else if (job.type === 'restore') {
+      const ok = r.restored?.length ?? 0, fail = r.errors?.length ?? 0;
+      msg = `Restored ${ok}${fail ? `, ${fail} failed` : ''}`;
+    } else if (job.type === 'delete') {
+      const ok = r.deleted?.length ?? 0, fail = r.errors?.length ?? 0;
+      msg = `Deleted ${ok}${fail ? `, ${fail} failed` : ''}`;
+    }
+    showToast(msg, r.errors?.length ? 'error' : 'success');
+  }
+  _refreshAfterJob(info.tab);
+}
+
+function _refreshAfterJob(tab) {
+  if (tab === 'orphans') Promise.all([loadOrphans(), refreshStatus()]);
+  else if (tab === 'trash') Promise.all([loadTrash(), refreshStatus()]);
+  else refreshStatus();
+}
+
+function updateJobsIndicator() {
+  const el = document.getElementById('jobs-indicator');
+  if (!el) return;
+  const n = pendingJobs.size;
+  el.style.display = n ? '' : 'none';
+  el.textContent = `${n} job${n !== 1 ? 's' : ''} running`;
 }
 
 // ── Orphans ───────────────────────────────────────────────────────────────────
@@ -319,57 +393,64 @@ function updateSelectionBar(type) {
 // ── Actions — single ──────────────────────────────────────────────────────────
 
 async function moveOne(path) {
-  setLoading(true);
+  orphansData = orphansData.filter(i => i.path !== path);
+  renderOrphans();
+  setBadge('orphans', orphansData.length);
   try {
     const res = await apiFetch('/api/orphans/move', 'POST', { path });
-    if (res.errors?.length) throw new Error(res.errors[0].error);
-    showToast('Moved to trash', 'success');
-    await Promise.all([loadOrphans(), refreshStatus()]);
-  } catch (e) { showToast(e.message, 'error'); }
-  finally { setLoading(false); }
+    trackJob(res.job_id, 'move_to_trash', 'orphans');
+    showToast('Moving to trash…', 'success');
+  } catch (e) {
+    showToast(e.message, 'error');
+    loadOrphans();
+  }
 }
 
 async function ignoreOne(path) {
-  setLoading(true);
   try {
     await apiFetch('/api/ignore/add', 'POST', { path });
+    orphansData = orphansData.filter(i => i.path !== path);
+    renderOrphans();
     showToast('Ignored', 'success');
-    await Promise.all([loadOrphans(), refreshStatus()]);
+    refreshStatus();
   } catch (e) { showToast(e.message, 'error'); }
-  finally { setLoading(false); }
 }
 
 async function unignore(path) {
-  setLoading(true);
   try {
     await apiFetch('/api/ignore/remove', 'POST', { path });
     showToast('Unignored — cache invalidated', 'success');
     await Promise.all([loadIgnored(), refreshStatus()]);
   } catch (e) { showToast(e.message, 'error'); }
-  finally { setLoading(false); }
 }
 
 async function restoreOne(path) {
-  setLoading(true);
+  trashData = trashData.filter(i => i.trash_path !== path);
+  renderTrash();
+  setBadge('trash', trashData.length);
   try {
     const res = await apiFetch('/api/trash/restore', 'POST', { path });
-    if (res.errors?.length) throw new Error(res.errors[0].error);
-    showToast('Restored', 'success');
-    await Promise.all([loadTrash(), refreshStatus()]);
-  } catch (e) { showToast(e.message, 'error'); }
-  finally { setLoading(false); }
+    trackJob(res.job_id, 'restore', 'trash');
+    showToast('Restoring…', 'success');
+  } catch (e) {
+    showToast(e.message, 'error');
+    loadTrash();
+  }
 }
 
 async function deleteOne(path) {
   confirm('Permanently Delete', 'This cannot be undone. Delete this item forever?', async () => {
-    setLoading(true);
+    trashData = trashData.filter(i => i.trash_path !== path);
+    renderTrash();
+    setBadge('trash', trashData.length);
     try {
       const res = await apiFetch('/api/trash/delete', 'POST', { path });
-      if (res.errors?.length) throw new Error(res.errors[0].error);
-      showToast('Deleted', 'success');
-      await Promise.all([loadTrash(), refreshStatus()]);
-    } catch (e) { showToast(e.message, 'error'); }
-    finally { setLoading(false); }
+      trackJob(res.job_id, 'delete', 'trash');
+      showToast('Deleting…', 'success');
+    } catch (e) {
+      showToast(e.message, 'error');
+      loadTrash();
+    }
   });
 }
 
@@ -379,14 +460,18 @@ async function moveAll() {
   const n = orphansData.length;
   if (!n) return;
   confirm('Move All to Trash', `Move all ${n} item${n !== 1 ? 's' : ''} to trash?`, async () => {
-    setLoading(true);
+    orphansData = [];
+    renderOrphans();
+    setBadge('orphans', 0);
+    clearSelection();
     try {
       const res = await apiFetch('/api/orphans/move', 'POST', {});
-      const ok = res.moved?.length ?? 0, fail = res.errors?.length ?? 0;
-      showToast(`Moved ${ok}${fail ? `, ${fail} failed` : ''}`, fail ? 'error' : 'success');
-      await Promise.all([loadOrphans(), refreshStatus()]);
-    } catch (e) { showToast(e.message, 'error'); }
-    finally { setLoading(false); }
+      trackJob(res.job_id, 'move_to_trash', 'orphans');
+      showToast(`Moving ${n} item${n !== 1 ? 's' : ''} to trash…`, 'success');
+    } catch (e) {
+      showToast(e.message, 'error');
+      loadOrphans();
+    }
   });
 }
 
@@ -394,14 +479,18 @@ async function restoreAll() {
   const n = trashData.length;
   if (!n) return;
   confirm('Restore All', `Restore all ${n} item${n !== 1 ? 's' : ''} to original locations?`, async () => {
-    setLoading(true);
+    trashData = [];
+    renderTrash();
+    setBadge('trash', 0);
+    clearSelection();
     try {
       const res = await apiFetch('/api/trash/restore', 'POST', {});
-      const ok = res.restored?.length ?? 0, fail = res.errors?.length ?? 0;
-      showToast(`Restored ${ok}${fail ? `, ${fail} failed` : ''}`, fail ? 'error' : 'success');
-      await Promise.all([loadTrash(), refreshStatus()]);
-    } catch (e) { showToast(e.message, 'error'); }
-    finally { setLoading(false); }
+      trackJob(res.job_id, 'restore', 'trash');
+      showToast(`Restoring ${n} item${n !== 1 ? 's' : ''}…`, 'success');
+    } catch (e) {
+      showToast(e.message, 'error');
+      loadTrash();
+    }
   });
 }
 
@@ -409,14 +498,18 @@ async function deleteAll() {
   const n = trashData.length;
   if (!n) return;
   confirm('Delete All Permanently', `Permanently delete all ${n} item${n !== 1 ? 's' : ''}? This cannot be undone.`, async () => {
-    setLoading(true);
+    trashData = [];
+    renderTrash();
+    setBadge('trash', 0);
+    clearSelection();
     try {
       const res = await apiFetch('/api/trash/delete', 'POST', {});
-      const ok = res.deleted?.length ?? 0, fail = res.errors?.length ?? 0;
-      showToast(`Deleted ${ok}${fail ? `, ${fail} failed` : ''}`, fail ? 'error' : 'success');
-      await Promise.all([loadTrash(), refreshStatus()]);
-    } catch (e) { showToast(e.message, 'error'); }
-    finally { setLoading(false); }
+      trackJob(res.job_id, 'delete', 'trash');
+      showToast(`Deleting ${n} item${n !== 1 ? 's' : ''}…`, 'success');
+    } catch (e) {
+      showToast(e.message, 'error');
+      loadTrash();
+    }
   });
 }
 
@@ -425,57 +518,66 @@ async function deleteAll() {
 async function moveSelected() {
   const paths = [...selectedPaths];
   if (!paths.length) return;
-  setLoading(true);
+  orphansData = orphansData.filter(i => !selectedPaths.has(i.path));
+  clearSelection();
+  renderOrphans();
+  setBadge('orphans', orphansData.length);
   try {
     const res = await apiFetch('/api/orphans/move', 'POST', { paths });
-    const ok = res.moved?.length ?? 0, fail = res.errors?.length ?? 0;
-    showToast(`Moved ${ok}${fail ? `, ${fail} failed` : ''}`, fail ? 'error' : 'success');
-    clearSelection();
-    await Promise.all([loadOrphans(), refreshStatus()]);
-  } catch (e) { showToast(e.message, 'error'); }
-  finally { setLoading(false); }
+    trackJob(res.job_id, 'move_to_trash', 'orphans');
+    showToast(`Moving ${paths.length} item${paths.length !== 1 ? 's' : ''} to trash…`, 'success');
+  } catch (e) {
+    showToast(e.message, 'error');
+    loadOrphans();
+  }
 }
 
 async function ignoreSelected() {
   const paths = [...selectedPaths];
   if (!paths.length) return;
-  setLoading(true);
   try {
     await apiFetch('/api/ignore/add', 'POST', { paths });
-    showToast(`Ignored ${paths.length} item${paths.length !== 1 ? 's' : ''}`, 'success');
+    orphansData = orphansData.filter(i => !selectedPaths.has(i.path));
     clearSelection();
-    await Promise.all([loadOrphans(), refreshStatus()]);
+    renderOrphans();
+    showToast(`Ignored ${paths.length} item${paths.length !== 1 ? 's' : ''}`, 'success');
+    refreshStatus();
   } catch (e) { showToast(e.message, 'error'); }
-  finally { setLoading(false); }
 }
 
 async function restoreSelected() {
   const paths = [...selectedPaths];
   if (!paths.length) return;
-  setLoading(true);
+  trashData = trashData.filter(i => !selectedPaths.has(i.trash_path));
+  clearSelection();
+  renderTrash();
+  setBadge('trash', trashData.length);
   try {
     const res = await apiFetch('/api/trash/restore', 'POST', { paths });
-    const ok = res.restored?.length ?? 0, fail = res.errors?.length ?? 0;
-    showToast(`Restored ${ok}${fail ? `, ${fail} failed` : ''}`, fail ? 'error' : 'success');
-    clearSelection();
-    await Promise.all([loadTrash(), refreshStatus()]);
-  } catch (e) { showToast(e.message, 'error'); }
-  finally { setLoading(false); }
+    trackJob(res.job_id, 'restore', 'trash');
+    showToast(`Restoring ${paths.length} item${paths.length !== 1 ? 's' : ''}…`, 'success');
+  } catch (e) {
+    showToast(e.message, 'error');
+    loadTrash();
+  }
 }
 
 async function deleteSelected() {
   const paths = [...selectedPaths];
   if (!paths.length) return;
   confirm('Delete Selected', `Permanently delete ${paths.length} item${paths.length !== 1 ? 's' : ''}?`, async () => {
-    setLoading(true);
+    trashData = trashData.filter(i => !selectedPaths.has(i.trash_path));
+    clearSelection();
+    renderTrash();
+    setBadge('trash', trashData.length);
     try {
       const res = await apiFetch('/api/trash/delete', 'POST', { paths });
-      const ok = res.deleted?.length ?? 0, fail = res.errors?.length ?? 0;
-      showToast(`Deleted ${ok}${fail ? `, ${fail} failed` : ''}`, fail ? 'error' : 'success');
-      clearSelection();
-      await Promise.all([loadTrash(), refreshStatus()]);
-    } catch (e) { showToast(e.message, 'error'); }
-    finally { setLoading(false); }
+      trackJob(res.job_id, 'delete', 'trash');
+      showToast(`Deleting ${paths.length} item${paths.length !== 1 ? 's' : ''}…`, 'success');
+    } catch (e) {
+      showToast(e.message, 'error');
+      loadTrash();
+    }
   });
 }
 
@@ -523,10 +625,6 @@ function escHtml(s) {
   return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 function escAttr(s) { return String(s ?? '').replace(/'/g,"\\'").replace(/"/g,'&quot;'); }
-
-function setLoading(on) {
-  document.querySelectorAll('.btn').forEach(b => b.disabled = on);
-}
 
 function formatAge(date) {
   const s = Math.floor((Date.now() - date.getTime()) / 1000);
