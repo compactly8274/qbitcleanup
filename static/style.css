@@ -92,7 +92,20 @@ header {
 .jobs-panel-title {
   font-size: 0.75rem; font-weight: 600; text-transform: uppercase;
   letter-spacing: 0.06em; color: var(--text-muted); margin-bottom: 0.65rem;
+  display: flex; align-items: center; justify-content: space-between;
 }
+.job-cancel-all-btn {
+  font-size: 0.72rem; font-weight: 500; text-transform: none; letter-spacing: 0;
+  background: none; border: 1px solid var(--danger); color: var(--danger);
+  border-radius: var(--radius-sm); padding: 0.15rem 0.5rem; cursor: pointer;
+}
+.job-cancel-all-btn:hover { background: rgba(239,68,68,0.1); }
+.job-cancel-btn {
+  background: none; border: none; color: var(--text-muted);
+  font-size: 0.75rem; cursor: pointer; padding: 0.1rem 0.25rem;
+  border-radius: 3px; line-height: 1;
+}
+.job-cancel-btn:hover { color: var(--danger); background: rgba(239,68,68,0.1); }
 .job-item { padding: 0.5rem 0; }
 .job-item + .job-item { border-top: 1px solid var(--border); }
 .job-item-label {

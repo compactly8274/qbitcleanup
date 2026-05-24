@@ -33,6 +33,8 @@ def _execute_job(job):
     if jtype == "move_to_trash":
         moved, errors = [], []
         for i, p in enumerate(paths):
+            if db.is_job_cancelled(job_id):
+                break
             try:
                 dest = trash_mod.move_to_trash(p)
                 db.remove_from_cache(p)
@@ -45,6 +47,8 @@ def _execute_job(job):
     if jtype == "restore":
         restored, errors = [], []
         for i, p in enumerate(paths):
+            if db.is_job_cancelled(job_id):
+                break
             try:
                 dest = trash_mod.restore(p)
                 restored.append({"from": p, "to": dest})
@@ -56,6 +60,8 @@ def _execute_job(job):
     if jtype == "delete":
         deleted, errors = [], []
         for i, p in enumerate(paths):
+            if db.is_job_cancelled(job_id):
+                break
             try:
                 trash_mod.delete(p)
                 deleted.append(p)
@@ -76,11 +82,13 @@ def _job_worker():
                 log.info("Job %s type=%s paths=%d", job["id"][:8], job["type"], n)
                 try:
                     result = _execute_job(job)
-                    db.complete_job(job["id"], result)
+                    if not db.is_job_cancelled(job["id"]):
+                        db.complete_job(job["id"], result)
                     log.info("Job %s done", job["id"][:8])
                 except Exception as e:
                     log.error("Job %s failed: %s", job["id"][:8], e)
-                    db.fail_job(job["id"], str(e))
+                    if not db.is_job_cancelled(job["id"]):
+                        db.fail_job(job["id"], str(e))
             else:
                 db.prune_jobs()
                 time.sleep(0.5)
@@ -243,6 +251,18 @@ def api_job(job_id):
     if not job:
         return jsonify({"error": "not found"}), 404
     return jsonify(job)
+
+
+@app.route("/api/jobs/<job_id>/cancel", methods=["POST"])
+def api_job_cancel(job_id):
+    db.cancel_job(job_id)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/jobs/cancel", methods=["POST"])
+def api_jobs_cancel_all():
+    db.cancel_all_pending_jobs()
+    return jsonify({"ok": True})
 
 
 @app.route("/api/ignore")

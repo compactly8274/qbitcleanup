@@ -235,10 +235,36 @@ def get_pending_jobs():
         return [dict(r) for r in rows]
 
 
+def is_job_cancelled(job_id):
+    with _conn() as c:
+        row = c.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+        return bool(row and row["status"] == "cancelled")
+
+
+def cancel_job(job_id):
+    now = int(time.time())
+    with _conn() as c:
+        c.execute(
+            "UPDATE jobs SET status='cancelled', updated_at=? "
+            "WHERE id=? AND status IN ('queued','running')",
+            (now, job_id),
+        )
+
+
+def cancel_all_pending_jobs():
+    now = int(time.time())
+    with _conn() as c:
+        c.execute(
+            "UPDATE jobs SET status='cancelled', updated_at=? "
+            "WHERE status IN ('queued','running')",
+            (now,),
+        )
+
+
 def prune_jobs():
     cutoff = int(time.time()) - 3600
     with _conn() as c:
         c.execute(
-            "DELETE FROM jobs WHERE status IN ('done','error') AND updated_at < ?",
+            "DELETE FROM jobs WHERE status IN ('done','error','cancelled') AND updated_at < ?",
             (cutoff,),
         )
