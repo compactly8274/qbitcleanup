@@ -90,7 +90,7 @@ You will also need to add the Docker bridge subnet (typically `172.17.0.0/16`) t
 | `DOWNLOADS_DIR` | `/downloads` | Path to your downloads directory |
 | `TRASH_DIR` | `/downloads/.qbit-trash` | Where orphans are moved for review |
 | `DB_PATH` | `/downloads/.qbitcleanup.db` | SQLite cache database (on the mounted volume so it persists) |
-| `SCAN_CACHE_TTL` | `300` | Seconds before a cached scan result is considered stale |
+| `SCAN_CACHE_TTL` | `604800` | Seconds before a cached scan result is considered stale (default: 1 week) |
 
 ## API Endpoints
 

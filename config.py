@@ -9,4 +9,4 @@ QBIT_PASSWORD = os.environ.get("QBIT_PASSWORD", "")
 DOWNLOADS_DIR = os.environ.get("DOWNLOADS_DIR", "/downloads")
 TRASH_DIR = os.environ.get("TRASH_DIR", "/downloads/.qbit-trash")
 DB_PATH = os.environ.get("DB_PATH", "/downloads/.qbitcleanup.db")
-SCAN_CACHE_TTL = int(os.environ.get("SCAN_CACHE_TTL", 300))  # seconds
+SCAN_CACHE_TTL = int(os.environ.get("SCAN_CACHE_TTL", 604800))  # seconds (default: 1 week)
