@@ -42,7 +42,7 @@ async function refreshStatus() {
       text.textContent = `Connected${data.version ? ' v' + data.version : ''}`;
     } else {
       dot.className = 'status-dot disconnected';
-      text.textContent = 'Offline';
+      text.textContent = data.error ? `Offline: ${data.error}` : 'Offline';
     }
     setBadge('orphans', data.orphan_count ?? 0);
     setBadge('trash', data.trash_count ?? 0);
