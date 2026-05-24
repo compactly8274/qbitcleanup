@@ -24,6 +24,21 @@ with app.app_context():
 
 # ── Background job worker ─────────────────────────────────────────────────────
 
+_worker_thread = None
+_worker_lock = threading.Lock()
+
+
+def _ensure_worker():
+    global _worker_thread
+    if _worker_thread is not None and _worker_thread.is_alive():
+        return
+    with _worker_lock:
+        if _worker_thread is not None and _worker_thread.is_alive():
+            return
+        log.info("Starting job worker thread")
+        _worker_thread = threading.Thread(target=_job_worker, daemon=True, name="job-worker")
+        _worker_thread.start()
+
 def _execute_job(job):
     payload = json.loads(job["payload"])
     paths = payload.get("paths", [])
@@ -211,6 +226,7 @@ def api_orphans_move():
     data = request.get_json(silent=True) or {}
     paths = data.get("paths") or ([data["path"]] if data.get("path") else None)
     targets = paths if paths else [o["path"] for o in db.get_cached_orphans()]
+    _ensure_worker()
     job_id = db.enqueue_job("move_to_trash", targets)
     return jsonify({"job_id": job_id, "queued": True, "count": len(targets)})
 
@@ -226,6 +242,7 @@ def api_trash_restore():
     paths = data.get("paths") or ([data["path"]] if data.get("path") else None)
     items = trash_mod.list_trash()
     targets = paths if paths else [i["trash_path"] for i in items]
+    _ensure_worker()
     job_id = db.enqueue_job("restore", targets)
     return jsonify({"job_id": job_id, "queued": True, "count": len(targets)})
 
@@ -236,6 +253,7 @@ def api_trash_delete():
     paths = data.get("paths") or ([data["path"]] if data.get("path") else None)
     items = trash_mod.list_trash()
     targets = paths if paths else [i["trash_path"] for i in items]
+    _ensure_worker()
     job_id = db.enqueue_job("delete", targets)
     return jsonify({"job_id": job_id, "queued": True, "count": len(targets)})
 
