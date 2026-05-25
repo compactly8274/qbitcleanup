@@ -1,8 +1,13 @@
+import errno
 import json
+import logging
 import os
 import shutil
+import time
 from pathlib import Path
 import config
+
+log = logging.getLogger(__name__)
 
 
 def _meta_path(trash_entry_path):
@@ -22,6 +27,25 @@ def _read_meta(trash_entry_path):
         except (json.JSONDecodeError, OSError):
             pass
     return {}
+
+
+def _fast_move(src, dest):
+    """Try os.rename first; fall back to copy+delete on cross-device (EXDEV).
+    Returns True if rename succeeded (instant), False if copy was needed (slow)."""
+    try:
+        os.rename(str(src), str(dest))
+        return True
+    except OSError as e:
+        if e.errno != errno.EXDEV:
+            raise
+        # Cross-device: copy then remove
+        if src.is_dir():
+            shutil.copytree(str(src), str(dest))
+            shutil.rmtree(str(src))
+        else:
+            shutil.copy2(str(src), str(dest))
+            src.unlink()
+        return False
 
 
 def move_to_trash(src_path):
@@ -51,7 +75,20 @@ def move_to_trash(src_path):
             i += 1
         dest = parent / f"{base}.{i}"
 
-    shutil.move(str(src), str(dest))
+    t0 = time.monotonic()
+    renamed = _fast_move(src, dest)
+    elapsed = time.monotonic() - t0
+
+    if renamed:
+        log.info("Trashed (rename) %s in %.2fs", src.name, elapsed)
+    else:
+        log.warning(
+            "Trashed (copy+delete) %s in %.1fs — DOWNLOADS_DIR and TRASH_DIR are on "
+            "different filesystems/datasets. Move TRASH_DIR inside the same ZFS dataset "
+            "as your files to make this instant.",
+            src.name, elapsed,
+        )
+
     _write_meta(dest, src)
     return str(dest)
 
@@ -141,7 +178,18 @@ def restore(trash_path):
         raise FileExistsError(f"Destination already exists: {original}")
 
     dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(tp), str(dest))
+
+    t0 = time.monotonic()
+    renamed = _fast_move(tp, dest)
+    elapsed = time.monotonic() - t0
+
+    if renamed:
+        log.info("Restored (rename) %s in %.2fs", tp.name, elapsed)
+    else:
+        log.warning(
+            "Restored (copy+delete) %s in %.1fs — cross-dataset move detected.",
+            tp.name, elapsed,
+        )
 
     mp = _meta_path(tp)
     if mp.exists():

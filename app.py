@@ -29,6 +29,29 @@ _worker_lock = threading.Lock()
 
 
 def _startup_cleanup():
+    # Warn immediately if DOWNLOADS_DIR and TRASH_DIR are on different devices
+    try:
+        import os as _os
+        dl_dev = _os.stat(config.DOWNLOADS_DIR).st_dev
+        trash = config.TRASH_DIR
+        import pathlib as _pl
+        _pl.Path(trash).mkdir(parents=True, exist_ok=True)
+        tr_dev = _os.stat(trash).st_dev
+        if dl_dev != tr_dev:
+            log.warning(
+                "CROSS-DEVICE TRASH: DOWNLOADS_DIR (%s) and TRASH_DIR (%s) are on "
+                "different filesystems. File moves will require a full copy and will be "
+                "slow for large files. Fix: set TRASH_DIR to a path inside the same "
+                "ZFS dataset as DOWNLOADS_DIR (e.g. %s/.qbit-trash).",
+                config.DOWNLOADS_DIR, config.TRASH_DIR, config.DOWNLOADS_DIR,
+            )
+        else:
+            log.info(
+                "Trash dir is on the same device as downloads — moves will be instant (rename)."
+            )
+    except Exception as e:
+        log.warning("Device check failed: %s", e)
+
     try:
         n = db.cleanup_stale_cache()
         if n:
