@@ -29,6 +29,29 @@ _worker_lock = threading.Lock()
 
 
 def _startup_cleanup():
+    # Warn immediately if DOWNLOADS_DIR and TRASH_DIR are on different devices
+    try:
+        import os as _os
+        dl_dev = _os.stat(config.DOWNLOADS_DIR).st_dev
+        trash = config.TRASH_DIR
+        import pathlib as _pl
+        _pl.Path(trash).mkdir(parents=True, exist_ok=True)
+        tr_dev = _os.stat(trash).st_dev
+        if dl_dev != tr_dev:
+            log.warning(
+                "TRASH_DIR (%s) is on a different filesystem/dataset than DOWNLOADS_DIR (%s). "
+                "Files on sub-datasets will be trashed locally (in a .qbit-trash folder next "
+                "to the source file) via instant rename. Files on the same dataset as "
+                "DOWNLOADS_DIR root will use copy+delete to reach TRASH_DIR.",
+                config.TRASH_DIR, config.DOWNLOADS_DIR,
+            )
+        else:
+            log.info(
+                "Trash dir is on the same device as downloads — moves will be instant (rename)."
+            )
+    except Exception as e:
+        log.warning("Device check failed: %s", e)
+
     try:
         n = db.cleanup_stale_cache()
         if n:
