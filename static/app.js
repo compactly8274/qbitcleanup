@@ -266,11 +266,15 @@ function _handleJobDone(job, info) {
   } else {
     let msg = '';
     if (job.type === 'move_to_trash') {
-      const ok = r.moved?.length ?? 0, fail = r.errors?.length ?? 0;
-      msg = `Moved ${ok} to trash${fail ? `, ${fail} failed` : ''}`;
+      const ok = r.moved?.length ?? 0, gone = r.not_found?.length ?? 0, fail = r.errors?.length ?? 0;
+      msg = `Moved ${ok} to trash`;
+      if (gone) msg += `, ${gone} already gone`;
+      if (fail) msg += `, ${fail} failed`;
     } else if (job.type === 'restore') {
-      const ok = r.restored?.length ?? 0, fail = r.errors?.length ?? 0;
-      msg = `Restored ${ok}${fail ? `, ${fail} failed` : ''}`;
+      const ok = r.restored?.length ?? 0, gone = r.not_found?.length ?? 0, fail = r.errors?.length ?? 0;
+      msg = `Restored ${ok}`;
+      if (gone) msg += `, ${gone} already gone`;
+      if (fail) msg += `, ${fail} failed`;
     } else if (job.type === 'delete') {
       const ok = r.deleted?.length ?? 0, fail = r.errors?.length ?? 0;
       msg = `Deleted ${ok}${fail ? `, ${fail} failed` : ''}`;
