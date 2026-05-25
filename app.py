@@ -39,11 +39,11 @@ def _startup_cleanup():
         tr_dev = _os.stat(trash).st_dev
         if dl_dev != tr_dev:
             log.warning(
-                "CROSS-DEVICE TRASH: DOWNLOADS_DIR (%s) and TRASH_DIR (%s) are on "
-                "different filesystems. File moves will require a full copy and will be "
-                "slow for large files. Fix: set TRASH_DIR to a path inside the same "
-                "ZFS dataset as DOWNLOADS_DIR (e.g. %s/.qbit-trash).",
-                config.DOWNLOADS_DIR, config.TRASH_DIR, config.DOWNLOADS_DIR,
+                "TRASH_DIR (%s) is on a different filesystem/dataset than DOWNLOADS_DIR (%s). "
+                "Files on sub-datasets will be trashed locally (in a .qbit-trash folder next "
+                "to the source file) via instant rename. Files on the same dataset as "
+                "DOWNLOADS_DIR root will use copy+delete to reach TRASH_DIR.",
+                config.TRASH_DIR, config.DOWNLOADS_DIR,
             )
         else:
             log.info(
