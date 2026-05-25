@@ -79,7 +79,7 @@ def _execute_job(job):
     job_id = job["id"]
 
     if jtype == "move_to_trash":
-        moved, errors = [], []
+        moved, not_found, errors = [], [], []
         for i, p in enumerate(paths):
             if db.is_job_cancelled(job_id):
                 break
@@ -93,8 +93,10 @@ def _execute_job(job):
                 moved.append({"from": p, "to": dest})
                 clean_cache = True
             except FileNotFoundError:
+                not_found.append(p)
                 clean_cache = True  # ghost entry — scrub it
             except Exception as e:
+                log.warning("Job %s: failed to trash %s: %s", job_id[:8], p, e)
                 errors.append({"path": p, "error": str(e)})
             if clean_cache:
                 try:
@@ -105,10 +107,12 @@ def _execute_job(job):
                 db.update_job_progress(job_id, i + 1)
             except Exception:
                 pass
-        return {"moved": moved, "errors": errors}
+        if not_found:
+            log.info("Job %s: %d path(s) already gone (removed from cache)", job_id[:8], len(not_found))
+        return {"moved": moved, "not_found": not_found, "errors": errors}
 
     if jtype == "restore":
-        restored, errors = [], []
+        restored, not_found, errors = [], [], []
         for i, p in enumerate(paths):
             if db.is_job_cancelled(job_id):
                 break
@@ -120,14 +124,15 @@ def _execute_job(job):
                 dest = trash_mod.restore(p)
                 restored.append({"from": p, "to": dest})
             except FileNotFoundError:
-                pass  # already restored or deleted elsewhere
+                not_found.append(p)
             except Exception as e:
+                log.warning("Job %s: failed to restore %s: %s", job_id[:8], p, e)
                 errors.append({"path": p, "error": str(e)})
             try:
                 db.update_job_progress(job_id, i + 1)
             except Exception:
                 pass
-        return {"restored": restored, "errors": errors}
+        return {"restored": restored, "not_found": not_found, "errors": errors}
 
     if jtype == "delete":
         deleted, errors = [], []
@@ -144,6 +149,7 @@ def _execute_job(job):
             except FileNotFoundError:
                 deleted.append(p)  # already gone, count as success
             except Exception as e:
+                log.warning("Job %s: failed to delete %s: %s", job_id[:8], p, e)
                 errors.append({"path": p, "error": str(e)})
             try:
                 db.update_job_progress(job_id, i + 1)
