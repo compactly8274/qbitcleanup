@@ -299,7 +299,15 @@ main { max-width: 900px; margin: 0 auto; padding: 0 1rem 6rem; }
 .file-name {
   font-weight: 500; white-space: nowrap; overflow: hidden;
   text-overflow: ellipsis; font-size: 0.9rem;
+  cursor: pointer;
 }
+.file-name:hover { color: var(--accent); }
+.file-full-path {
+  font-size: 0.72rem; color: var(--text-muted); font-family: monospace;
+  word-break: break-all; margin-top: 0.2rem; line-height: 1.4;
+  cursor: pointer; opacity: 0.8;
+}
+.file-full-path:hover { opacity: 1; color: var(--text); }
 .file-meta {
   font-size: 0.78rem; color: var(--text-muted);
   margin-top: 0.15rem; display: flex; gap: 0.75rem; flex-wrap: wrap;
@@ -394,7 +402,7 @@ main { max-width: 900px; margin: 0 auto; padding: 0 1rem 6rem; }
 .modal {
   background: var(--surface2); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 1.5rem;
-  max-width: 420px; width: 100%;
+  max-width: 540px; width: 100%;
 }
 .modal-title { font-size: 1rem; font-weight: 700; margin-bottom: 0.75rem; }
 .modal-body { font-size: 0.875rem; color: var(--text-muted); margin-bottom: 1.25rem; line-height: 1.6; }

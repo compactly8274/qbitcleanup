@@ -1,3 +1,4 @@
+import fnmatch
 import time
 from pathlib import Path
 import config
@@ -79,8 +80,12 @@ def _is_ignored(entry, ignore_paths):
         return False
     s = str(entry)
     for ig in ignore_paths:
-        if s == ig or s.startswith(ig.rstrip("/") + "/"):
-            return True
+        if any(c in ig for c in '*?['):
+            if fnmatch.fnmatchcase(s, ig):
+                return True
+        else:
+            if s == ig or s.startswith(ig.rstrip("/") + "/"):
+                return True
     return False
 
 
