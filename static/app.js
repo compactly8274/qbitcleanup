@@ -604,7 +604,7 @@ function fileRow(item, type) {
     <div class="row-check"><input type="checkbox" ${checked} onchange="toggleSelect('${pa}', '${type}', this)"></div>
     <div class="file-icon">${icon}</div>
     <div class="file-info">
-      <div class="file-name" title="${escAttr(item.name)}">${escHtml(item.name)}</div>
+      <div class="file-name" title="Click to show full path" onclick="toggleFullPath(this,'${pa}')">${escHtml(item.name)}</div>
       <div class="file-meta"><span>${escHtml(item.size_human)}</span><span title="Last accessed">⏱ ${accessed}</span></div>
       ${pathLine}
     </div>
@@ -686,14 +686,74 @@ async function moveOne(path) {
   }
 }
 
-async function ignoreOne(path) {
-  try {
-    await apiFetch('/api/ignore/add', 'POST', { path });
-    orphansData = orphansData.filter(i => i.path !== path);
-    renderOrphans();
-    showToast('Ignored', 'success');
-    refreshStatus();
-  } catch (e) { showToast(e.message, 'error'); }
+function ignoreOne(path) {
+  _openIgnoreDialog(path);
+}
+
+function _openIgnoreDialog(path) {
+  document.getElementById('modal-title').textContent = 'Ignore path';
+  document.getElementById('modal-body').innerHTML = `
+    <div style="margin-bottom:0.5rem;font-size:0.82rem">
+      Use <code style="background:var(--surface);padding:0.1em 0.35em;border-radius:3px">*</code>
+      as a wildcard — e.g. <code style="background:var(--surface);padding:0.1em 0.35em;border-radius:3px">unpackerr*.log</code>
+      matches any rotating log file.
+    </div>
+    <input type="text" id="ignore-pattern-input" class="search-input"
+           style="width:100%;font-family:monospace;font-size:0.82rem"
+           value="${escHtml(path)}"
+           onkeydown="if(event.key==='Enter')document.getElementById('modal-confirm-btn').click()">
+  `;
+  const btn = document.getElementById('modal-confirm-btn');
+  btn.className = 'btn btn-secondary';
+  btn.textContent = 'Ignore';
+  btn.onclick = async () => {
+    const pattern = document.getElementById('ignore-pattern-input')?.value.trim();
+    if (!pattern) return;
+    closeModal();
+    try {
+      await apiFetch('/api/ignore/add', 'POST', { path: pattern });
+      orphansData = orphansData.filter(i => !_pathMatchesIgnore(i.path, pattern));
+      renderOrphans();
+      showToast('Ignored', 'success');
+      refreshStatus();
+    } catch (e) { showToast(e.message, 'error'); }
+  };
+  document.getElementById('modal-backdrop').classList.add('open');
+  requestAnimationFrame(() => {
+    const inp = document.getElementById('ignore-pattern-input');
+    if (inp) { inp.focus(); inp.select(); }
+  });
+}
+
+function _pathMatchesIgnore(path, pattern) {
+  if (!/[*?[\]]/.test(pattern)) {
+    return path === pattern || path.startsWith(pattern.replace(/\/$/, '') + '/');
+  }
+  const re = new RegExp('^' + pattern
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*\*/g, '\x01')
+    .replace(/\*/g, '[^/]*')
+    .replace(/\?/g, '[^/]')
+    .replace(/\x01/g, '.*') + '$');
+  return re.test(path);
+}
+
+function toggleFullPath(el, fullPath) {
+  const existing = el.parentElement.querySelector('.file-full-path');
+  if (existing) { existing.remove(); return; }
+  const div = document.createElement('div');
+  div.className = 'file-full-path';
+  div.textContent = fullPath;
+  div.title = 'Click to copy';
+  div.onclick = e => {
+    e.stopPropagation();
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(fullPath).then(() => showToast('Path copied', 'success'));
+    } else {
+      showToast(fullPath, 'info');
+    }
+  };
+  el.after(div);
 }
 
 async function unignore(path) {

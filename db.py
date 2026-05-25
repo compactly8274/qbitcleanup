@@ -155,12 +155,17 @@ def remove_from_cache(path):
 
 
 def remove_subtree_from_cache(path):
-    """Remove path and all cached entries whose path starts with path + '/'."""
+    """Remove path and all cached entries matching it (exact prefix or glob pattern)."""
+    import fnmatch as _fnmatch
+    has_glob = any(c in path for c in '*?[')
     prefix = path.rstrip('/') + '/'
     with _conn() as c:
         rows = c.execute("SELECT path FROM orphan_cache").fetchall()
-        targets = [r['path'] for r in rows
-                   if r['path'] == path or r['path'].startswith(prefix)]
+        if has_glob:
+            targets = [r['path'] for r in rows if _fnmatch.fnmatchcase(r['path'], path)]
+        else:
+            targets = [r['path'] for r in rows
+                       if r['path'] == path or r['path'].startswith(prefix)]
         if targets:
             c.executemany("DELETE FROM orphan_cache WHERE path = ?",
                           [(p,) for p in targets])
