@@ -10,6 +10,10 @@ let lastOrphanRes = null;
 let selectedPaths = new Set();
 let groupingEnabled = false;
 
+// Pagination
+let pageSize = 50;
+const currentPage = { orphans: 1, trash: 1 };
+
 // Job tracking
 let pendingJobs = new Map(); // job_id -> {type, tab}
 let jobPollTimer = null;
@@ -243,6 +247,89 @@ async function cancelAllJobs() {
   } catch (e) { showToast(e.message, 'error'); }
 }
 
+// ── Pagination ────────────────────────────────────────────────────────────────
+
+function _paginate(items, page) {
+  if (!pageSize) return { items, page: 1, totalPages: 1, start: 0, end: items.length, total: items.length };
+  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+  const p = Math.min(Math.max(1, page), totalPages);
+  const start = (p - 1) * pageSize;
+  const end = Math.min(start + pageSize, items.length);
+  return { items: items.slice(start, end), page: p, totalPages, start, end, total: items.length };
+}
+
+function _pageNums(cur, total) {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const s = new Set([1, total, cur, Math.max(1, cur - 1), Math.min(total, cur + 1)]);
+  const sorted = [...s].sort((a, b) => a - b);
+  const r = [];
+  let prev = 0;
+  for (const p of sorted) {
+    if (p - prev > 1) r.push('…');
+    r.push(p);
+    prev = p;
+  }
+  return r;
+}
+
+function _renderPagination(tab, paged) {
+  const { page, totalPages, start, end, total } = paged;
+  if (totalPages <= 1 && !pageSize) return '';
+
+  const btns = _pageNums(page, totalPages).map(n =>
+    typeof n === 'string'
+      ? `<span class="page-ellipsis">${n}</span>`
+      : `<button class="page-btn${n === page ? ' active' : ''}" onclick="goToPage('${tab}',${n})">${n}</button>`
+  ).join('');
+
+  const sizeOpts = [25, 50, 100, 250, 0].map(n =>
+    `<option value="${n}"${pageSize === n ? ' selected' : ''}>${n || 'All'}</option>`
+  ).join('');
+
+  return `<div class="pagination">
+    <span class="page-info">${total ? start + 1 : 0}–${end} of ${total}</span>
+    <div class="page-btns">
+      <button class="page-btn" onclick="goToPage('${tab}',${page - 1})"${page <= 1 ? ' disabled' : ''}>‹</button>
+      ${btns}
+      <button class="page-btn" onclick="goToPage('${tab}',${page + 1})"${page >= totalPages ? ' disabled' : ''}>›</button>
+    </div>
+    <select class="page-size-sel" onchange="setPageSize(+this.value)" title="Items per page">${sizeOpts}</select>
+  </div>`;
+}
+
+function goToPage(tab, page) {
+  currentPage[tab] = page;
+  if (tab === 'orphans') renderOrphans();
+  else renderTrash();
+}
+
+function setPageSize(size) {
+  pageSize = size;
+  currentPage.orphans = 1;
+  currentPage.trash = 1;
+  if (currentTab === 'orphans') renderOrphans();
+  else if (currentTab === 'trash') renderTrash();
+}
+
+async function movePageItems() {
+  const filtered = applyFilters(orphansData, 'orphan');
+  const paged = _paginate(filtered, currentPage.orphans);
+  const paths = paged.items.map(i => i.path);
+  if (!paths.length) return;
+  const pathSet = new Set(paths);
+  orphansData = orphansData.filter(i => !pathSet.has(i.path));
+  renderOrphans();
+  setBadge('orphans', orphansData.length);
+  try {
+    const res = await apiFetch('/api/orphans/move', 'POST', { paths });
+    trackJob(res.job_id, 'move_to_trash', 'orphans');
+    showToast(`Moving ${paths.length} item${paths.length !== 1 ? 's' : ''} to trash…`, 'success');
+  } catch (e) {
+    showToast(e.message, 'error');
+    loadOrphans();
+  }
+}
+
 function _truncateFilename(name, max) {
   if (name.length <= max) return name;
   const ext = name.includes('.') ? name.slice(name.lastIndexOf('.')) : '';
@@ -302,6 +389,7 @@ function updateJobsIndicator() {
 
 async function loadOrphans(force = false) {
   setListLoading('orphans-list', force ? 'Scanning…' : 'Loading…');
+  currentPage.orphans = 1;
   try {
     const res = await apiFetch(force ? '/api/orphans?refresh=true' : '/api/orphans');
     orphansData = res.orphans ?? [];
@@ -331,13 +419,17 @@ function renderOrphans() {
     return;
   }
 
-  list.innerHTML = meta + (groupingEnabled ? renderGrouped(filtered, 'orphan') : filtered.map(i => fileRow(i, 'orphan')).join(''));
+  const paged = _paginate(filtered, currentPage.orphans);
+  currentPage.orphans = paged.page;
+  const rows = groupingEnabled ? renderGrouped(paged.items, 'orphan') : paged.items.map(i => fileRow(i, 'orphan')).join('');
+  list.innerHTML = meta + rows + _renderPagination('orphans', paged);
 }
 
 // ── Trash ─────────────────────────────────────────────────────────────────────
 
 async function loadTrash() {
   setListLoading('trash-list', 'Loading…');
+  currentPage.trash = 1;
   try {
     trashData = await apiFetch('/api/trash');
     renderTrash();
@@ -351,9 +443,13 @@ async function loadTrash() {
 function renderTrash() {
   const list = document.getElementById('trash-list');
   const filtered = applyFilters(trashData, 'trash');
-  list.innerHTML = filtered.length
-    ? filtered.map(i => fileRow(i, 'trash')).join('')
-    : '<div class="empty-state"><div class="empty-icon">🗑</div><div>Trash is empty</div></div>';
+  if (!filtered.length) {
+    list.innerHTML = '<div class="empty-state"><div class="empty-icon">🗑</div><div>Trash is empty</div></div>';
+    return;
+  }
+  const paged = _paginate(filtered, currentPage.trash);
+  currentPage.trash = paged.page;
+  list.innerHTML = paged.items.map(i => fileRow(i, 'trash')).join('') + _renderPagination('trash', paged);
 }
 
 // ── Ignored ───────────────────────────────────────────────────────────────────
@@ -491,10 +587,12 @@ function toggleSelect(path, type, cb) {
 function toggleSelectAll(type) {
   const cbId = type === 'orphans' ? 'check-all-orphans' : 'check-all-trash';
   const master = document.getElementById(cbId);
-  const data = type === 'orphans' ? applyFilters(orphansData, 'orphan') : applyFilters(trashData, 'trash');
+  const tab = type === 'orphans' ? 'orphans' : 'trash';
+  const filtered = type === 'orphans' ? applyFilters(orphansData, 'orphan') : applyFilters(trashData, 'trash');
+  const paged = _paginate(filtered, currentPage[tab]);
   const pathKey = type === 'orphans' ? 'path' : 'trash_path';
-  if (master.checked) data.forEach(i => selectedPaths.add(i[pathKey]));
-  else data.forEach(i => selectedPaths.delete(i[pathKey]));
+  if (master.checked) paged.items.forEach(i => selectedPaths.add(i[pathKey]));
+  else paged.items.forEach(i => selectedPaths.delete(i[pathKey]));
   if (type === 'orphans') renderOrphans(); else renderTrash();
   updateSelectionBar(type === 'orphans' ? 'orphan' : 'trash');
 }
