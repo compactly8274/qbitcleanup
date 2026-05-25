@@ -442,7 +442,7 @@ def api_ignore_add():
         return jsonify({"error": "path or paths required"}), 400
     for p in paths:
         db.add_to_ignore(p)
-        db.remove_from_cache(p)
+        db.remove_subtree_from_cache(p)
     return jsonify({"ok": True, "count": len(paths)})
 
 

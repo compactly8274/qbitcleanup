@@ -154,6 +154,18 @@ def remove_from_cache(path):
         c.execute("DELETE FROM orphan_cache WHERE path = ?", (path,))
 
 
+def remove_subtree_from_cache(path):
+    """Remove path and all cached entries whose path starts with path + '/'."""
+    prefix = path.rstrip('/') + '/'
+    with _conn() as c:
+        rows = c.execute("SELECT path FROM orphan_cache").fetchall()
+        targets = [r['path'] for r in rows
+                   if r['path'] == path or r['path'].startswith(prefix)]
+        if targets:
+            c.executemany("DELETE FROM orphan_cache WHERE path = ?",
+                          [(p,) for p in targets])
+
+
 def invalidate():
     with _conn() as c:
         c.execute("UPDATE scan_state SET last_scan = 0 WHERE id = 1")
