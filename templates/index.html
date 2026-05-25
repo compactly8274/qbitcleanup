@@ -44,6 +44,7 @@
           <input type="checkbox" id="check-all-orphans" onchange="toggleSelectAll('orphans')">
         </label>
         <button class="btn btn-warning" onclick="moveAll()">Move All</button>
+        <button class="btn btn-warning btn-outline" onclick="movePageItems()" title="Move all items on this page to trash">Trash Page</button>
         <button class="btn btn-secondary" onclick="loadOrphans(true)">Re-scan</button>
         <select class="sort-select" id="orphan-sort" onchange="renderOrphans()">
           <option value="size-desc">Size ↓</option>
