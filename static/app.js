@@ -9,6 +9,8 @@ let ignoredData = [];
 let lastOrphanRes = null;
 let selectedPaths = new Set();
 let groupingEnabled = false;
+let groupingMode = 'none'; // 'none' | 'type' | 'folder'
+let _groupPathStore = [];
 
 // Pagination
 let pageSize = 50;
@@ -58,6 +60,7 @@ function switchTab(tab) {
   clearSelection();
   if (tab === 'orphans') loadOrphans();
   else if (tab === 'trash') loadTrash();
+  else if (tab === 'stats') loadStats();
   else loadIgnored();
 }
 
@@ -330,6 +333,23 @@ async function movePageItems() {
   }
 }
 
+async function trashGroup(idx) {
+  const paths = _groupPathStore[idx];
+  if (!paths || !paths.length) return;
+  const pathSet = new Set(paths);
+  orphansData = orphansData.filter(i => !pathSet.has(i.path));
+  renderOrphans();
+  setBadge('orphans', orphansData.length);
+  try {
+    const res = await apiFetch('/api/orphans/move', 'POST', { paths });
+    trackJob(res.job_id, 'move_to_trash', 'orphans');
+    showToast(`Moving ${paths.length} item${paths.length !== 1 ? 's' : ''} to trash…`, 'success');
+  } catch (e) {
+    showToast(e.message, 'error');
+    loadOrphans();
+  }
+}
+
 function _truncateFilename(name, max) {
   if (name.length <= max) return name;
   const ext = name.includes('.') ? name.slice(name.lastIndexOf('.')) : '';
@@ -403,6 +423,7 @@ async function loadOrphans(force = false) {
 }
 
 function renderOrphans() {
+  _groupPathStore = [];
   const list = document.getElementById('orphans-list');
   const res = lastOrphanRes || {};
   const lastScan = res.last_scan ? new Date(res.last_scan * 1000) : null;
@@ -494,6 +515,7 @@ function applyFilters(data, type) {
   const sortId   = type === 'orphan' ? 'orphan-sort'    : 'trash-sort';
   const query = (document.getElementById(searchId)?.value ?? '').toLowerCase();
   const ageDays = parseInt(document.getElementById('age-filter')?.value ?? '0');
+  const minSize = parseInt(document.getElementById('size-filter')?.value ?? '0');
   const [sortField, sortDir] = (document.getElementById(sortId)?.value ?? 'size-desc').split('-');
   const asc = sortDir === 'asc';
   const key = sortField === 'size' ? 'size' : 'accessed';
@@ -502,11 +524,30 @@ function applyFilters(data, type) {
   return data
     .filter(i => !query || i.name.toLowerCase().includes(query) || (i.relative_path || '').toLowerCase().includes(query))
     .filter(i => !cutoff || i.modified < cutoff)
+    .filter(i => !minSize || i.size >= minSize)
     .sort((a, b) => asc ? a[key] - b[key] : b[key] - a[key]);
 }
 
 function renderGrouped(items, type) {
   const groups = {};
+  if (groupingMode === 'folder') {
+    for (const item of items) {
+      const rel = item.relative_path || item.name;
+      const top = rel.includes('/') ? rel.split('/')[0] : '(root)';
+      (groups[top] ??= []).push(item);
+    }
+    return Object.entries(groups).sort(([a], [b]) => a.localeCompare(b)).map(([label, grpItems]) => {
+      const totalSize = grpItems.reduce((s, i) => s + i.size, 0);
+      const idx = _groupPathStore.length;
+      _groupPathStore.push(grpItems.map(i => i.path));
+      return `<div class="group-header">
+        📁 ${escHtml(label)}
+        <span style="opacity:.5">(${grpItems.length} · ${fmtSize(totalSize)})</span>
+        <button class="btn btn-warning btn-sm group-trash-btn" onclick="trashGroup(${idx})">Trash All</button>
+      </div>` + grpItems.map(i => fileRow(i, type)).join('');
+    }).join('');
+  }
+  // type grouping (existing)
   for (const item of items) {
     const label = item.is_dir ? '📁 Folders' : fileTypeLabel(item.name);
     (groups[label] ??= []).push(item);
@@ -523,8 +564,13 @@ function renderGrouped(items, type) {
 }
 
 function toggleGrouping() {
-  groupingEnabled = !groupingEnabled;
-  document.getElementById('btn-group').classList.toggle('active', groupingEnabled);
+  const modes = ['none', 'type', 'folder'];
+  groupingMode = modes[(modes.indexOf(groupingMode) + 1) % 3];
+  groupingEnabled = groupingMode !== 'none';
+  const labels = { none: '⊞ Group', type: '⊞ By Type', folder: '⊞ By Folder' };
+  const btn = document.getElementById('btn-group');
+  btn.textContent = labels[groupingMode];
+  btn.classList.toggle('active', groupingMode !== 'none');
   renderOrphans();
 }
 
@@ -813,6 +859,142 @@ async function deleteSelected() {
       loadTrash();
     }
   });
+}
+
+// ── Stats ─────────────────────────────────────────────────────────────────────
+
+async function loadStats() {
+  document.getElementById('stats-cards').innerHTML = '<div class="loading"><span class="spinner"></span>Loading…</div>';
+  document.getElementById('chart-cleanup').innerHTML = '';
+  document.getElementById('chart-scans').innerHTML = '';
+  try {
+    const d = await apiFetch('/api/stats');
+    _renderStatsCards(d);
+    _renderCleanupChart(d.cleanup_history || []);
+    _renderScanChart(d.scan_history || []);
+  } catch (e) {
+    document.getElementById('stats-cards').innerHTML = `<div class="error-banner">${escHtml(e.message)}</div>`;
+  }
+}
+
+function _renderStatsCards(d) {
+  const cards = [
+    { label: 'Orphaned now', value: fmtSize(d.orphan_size || 0), sub: `${d.orphan_count || 0} items` },
+    { label: 'In trash', value: fmtSize(d.trash_size || 0), sub: '' },
+    { label: 'Cleaned (30d)', value: fmtSize(_sumBytes(d.cleanup_history, 'trash')), sub: `${_sumItems(d.cleanup_history, 'trash')} moved to trash` },
+    { label: 'Deleted (30d)', value: `${_sumItems(d.cleanup_history, 'delete')} items`, sub: 'permanently removed' },
+  ];
+  document.getElementById('stats-cards').innerHTML = cards.map(c => `
+    <div class="stat-card">
+      <div class="stat-value">${c.value}</div>
+      <div class="stat-label">${c.label}</div>
+      ${c.sub ? `<div class="stat-sub">${c.sub}</div>` : ''}
+    </div>
+  `).join('');
+}
+
+function _sumBytes(events, action) {
+  return (events || []).filter(e => e.action === action).reduce((s, e) => s + e.bytes_freed, 0);
+}
+function _sumItems(events, action) {
+  return (events || []).filter(e => e.action === action).reduce((s, e) => s + e.item_count, 0);
+}
+
+function _renderCleanupChart(events) {
+  const el = document.getElementById('chart-cleanup');
+  const DAYS = 30;
+  const now = Date.now() / 1000;
+  const buckets = Array.from({ length: DAYS }, (_, i) => ({ trash: 0, delete: 0 }));
+  for (const ev of events) {
+    const idx = DAYS - 1 - Math.floor((now - ev.occurred_at) / 86400);
+    if (idx >= 0 && idx < DAYS) {
+      if (ev.action === 'trash') buckets[idx].trash += ev.bytes_freed;
+      else buckets[idx].delete += ev.item_count * 1e8; // approximate for display
+    }
+  }
+  const maxVal = Math.max(1, ...buckets.map(b => b.trash + b.delete));
+  if (maxVal <= 1) { el.innerHTML = '<div class="chart-empty">No cleanup activity in the last 30 days.</div>'; return; }
+
+  const W = 560, H = 140, pL = 58, pR = 8, pT = 8, pB = 28;
+  const cW = W - pL - pR, cH = H - pT - pB;
+  const bW = Math.max(2, cW / DAYS - 2);
+
+  const bars = buckets.map((b, i) => {
+    const x = pL + i * (cW / DAYS) + 1;
+    const tH = (b.trash / maxVal) * cH;
+    const dH = (b.delete / maxVal) * cH;
+    return `<rect x="${x.toFixed(1)}" y="${(pT + cH - tH - dH).toFixed(1)}" width="${bW.toFixed(1)}" height="${dH.toFixed(1)}" fill="#ef4444" opacity="0.7"/>
+            <rect x="${x.toFixed(1)}" y="${(pT + cH - tH).toFixed(1)}" width="${bW.toFixed(1)}" height="${tH.toFixed(1)}" fill="#f59e0b" opacity="0.75"/>`;
+  }).join('');
+
+  const yLines = [0, 0.5, 1].map(f => {
+    const y = (pT + cH * (1 - f)).toFixed(1);
+    return `<line x1="${pL}" x2="${W - pR}" y1="${y}" y2="${y}" stroke="#2d3148" stroke-dasharray="3,3"/>
+            <text x="${pL - 4}" y="${(+y + 4).toFixed(1)}" text-anchor="end" font-size="10" fill="#7a8399">${fmtSize(f * maxVal)}</text>`;
+  }).join('');
+
+  const xLabels = Array.from({ length: 6 }, (_, j) => {
+    const i = Math.round(j * (DAYS - 1) / 5);
+    const x = (pL + i * (cW / DAYS) + bW / 2).toFixed(1);
+    const d = new Date((now - (DAYS - 1 - i) * 86400) * 1000);
+    return `<text x="${x}" y="${H - 4}" text-anchor="middle" font-size="10" fill="#7a8399">${d.getMonth()+1}/${d.getDate()}</text>`;
+  }).join('');
+
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:${H}px;display:block">
+    ${yLines}${bars}${xLabels}
+    <line x1="${pL}" x2="${pL}" y1="${pT}" y2="${pT+cH}" stroke="#2d3148"/>
+    <line x1="${pL}" x2="${W-pR}" y1="${pT+cH}" y2="${pT+cH}" stroke="#2d3148"/>
+  </svg>
+  <div class="chart-legend">
+    <span class="legend-dot" style="background:#f59e0b"></span>Trashed &nbsp;
+    <span class="legend-dot" style="background:#ef4444"></span>Deleted
+  </div>`;
+}
+
+function _renderScanChart(scans) {
+  const el = document.getElementById('chart-scans');
+  if (!scans.length) { el.innerHTML = '<div class="chart-empty">No scan history yet.</div>'; return; }
+
+  const W = 560, H = 120, pL = 58, pR = 8, pT = 8, pB = 28;
+  const cW = W - pL - pR, cH = H - pT - pB;
+  const maxCount = Math.max(1, ...scans.map(s => s.orphan_count));
+  const minT = scans[0].scanned_at, maxT = scans[scans.length - 1].scanned_at || (minT + 1);
+  const tRange = Math.max(1, maxT - minT);
+
+  const pts = scans.map(s => {
+    const x = pL + ((s.scanned_at - minT) / tRange) * cW;
+    const y = pT + cH - (s.orphan_count / maxCount) * cH;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+
+  const dots = scans.map(s => {
+    const x = (pL + ((s.scanned_at - minT) / tRange) * cW).toFixed(1);
+    const y = (pT + cH - (s.orphan_count / maxCount) * cH).toFixed(1);
+    return `<circle cx="${x}" cy="${y}" r="3" fill="#6366f1"/>`;
+  }).join('');
+
+  const yLines = [0, 0.5, 1].map(f => {
+    const y = (pT + cH * (1 - f)).toFixed(1);
+    const val = Math.round(f * maxCount);
+    return `<line x1="${pL}" x2="${W-pR}" y1="${y}" y2="${y}" stroke="#2d3148" stroke-dasharray="3,3"/>
+            <text x="${pL-4}" y="${(+y+4).toFixed(1)}" text-anchor="end" font-size="10" fill="#7a8399">${val}</text>`;
+  }).join('');
+
+  const area = `M${pL},${pT+cH} ` + scans.map(s => {
+    const x = pL + ((s.scanned_at - minT) / tRange) * cW;
+    const y = pT + cH - (s.orphan_count / maxCount) * cH;
+    return `L${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ') + ` L${(pL + cW).toFixed(1)},${pT+cH} Z`;
+
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:${H}px;display:block">
+    ${yLines}
+    <path d="${area}" fill="#6366f1" opacity="0.15"/>
+    <polyline points="${pts}" fill="none" stroke="#6366f1" stroke-width="2"/>
+    ${dots}
+    <line x1="${pL}" x2="${pL}" y1="${pT}" y2="${pT+cH}" stroke="#2d3148"/>
+    <line x1="${pL}" x2="${W-pR}" y1="${pT+cH}" y2="${pT+cH}" stroke="#2d3148"/>
+  </svg>
+  <div class="chart-legend"><span class="legend-dot" style="background:#6366f1"></span>Orphan count at scan time</div>`;
 }
 
 // ── Modal ─────────────────────────────────────────────────────────────────────

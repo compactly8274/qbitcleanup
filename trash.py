@@ -251,3 +251,45 @@ def delete(trash_path):
     mp = _meta_path(tp)
     if mp.exists():
         mp.unlink()
+
+
+def purge_old_trash(days):
+    """Permanently delete trash items older than `days` days. Returns count removed."""
+    if days <= 0:
+        return 0
+    cutoff = time.time() - days * 86400
+    trash_dirs = []
+    primary = Path(config.TRASH_DIR)
+    if primary.exists():
+        trash_dirs.append(primary)
+    downloads = Path(config.DOWNLOADS_DIR)
+    if downloads.exists():
+        try:
+            for p in downloads.rglob('.qbit-trash'):
+                if p.is_dir() and p.resolve() != primary.resolve():
+                    trash_dirs.append(p)
+        except (PermissionError, OSError):
+            pass
+    purged = 0
+    for trash_dir in trash_dirs:
+        try:
+            entries = list(trash_dir.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            if entry.name.startswith('.') or entry.name.endswith('.meta.json'):
+                continue
+            try:
+                if entry.stat().st_mtime < cutoff:
+                    if entry.is_dir() and not entry.is_symlink():
+                        shutil.rmtree(str(entry))
+                    else:
+                        entry.unlink()
+                    mp = _meta_path(entry)
+                    if mp.exists():
+                        mp.unlink()
+                    purged += 1
+                    log.info("Auto-purged from trash (>%dd): %s", days, entry.name)
+            except OSError as e:
+                log.warning("Auto-purge failed for %s: %s", entry, e)
+    return purged
