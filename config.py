@@ -13,3 +13,5 @@ SCAN_CACHE_TTL = int(os.environ.get("SCAN_CACHE_TTL", 604800))   # 1 week
 MIN_ORPHAN_AGE_DAYS = int(os.environ.get("MIN_ORPHAN_AGE_DAYS", 0))  # 0 = no minimum
 AUTO_TRASH_DAYS = int(os.environ.get("AUTO_TRASH_DAYS", 0))           # 0 = disabled
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "").strip()
+TRASH_PURGE_DAYS = int(os.environ.get("TRASH_PURGE_DAYS", 0))   # 0 = disabled
+SCAN_INTERVAL_HOURS = int(os.environ.get("SCAN_INTERVAL_HOURS", 0))  # 0 = manual only

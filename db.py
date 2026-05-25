@@ -52,6 +52,19 @@ def init():
                 started_at   INTEGER NOT NULL DEFAULT 0,
                 current_file TEXT
             );
+            CREATE TABLE IF NOT EXISTS scan_history (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                scanned_at   INTEGER NOT NULL,
+                orphan_count INTEGER NOT NULL,
+                orphan_size  INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS cleanup_events (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                occurred_at INTEGER NOT NULL,
+                action      TEXT NOT NULL,
+                item_count  INTEGER NOT NULL,
+                bytes_freed INTEGER NOT NULL
+            );
             INSERT OR IGNORE INTO scan_state (id, last_scan) VALUES (1, 0);
         """)
     # Migrate older databases missing newer columns
@@ -299,3 +312,47 @@ def cleanup_stale_cache():
         with _conn() as c:
             c.executemany("DELETE FROM orphan_cache WHERE path=?", [(p,) for p in stale])
     return len(stale)
+
+
+def record_scan(orphan_count, orphan_size):
+    now = int(time.time())
+    cutoff = now - 90 * 86400
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO scan_history (scanned_at, orphan_count, orphan_size) VALUES (?,?,?)",
+            (now, orphan_count, orphan_size),
+        )
+        c.execute("DELETE FROM scan_history WHERE scanned_at < ?", (cutoff,))
+
+
+def record_cleanup(action, item_count, bytes_freed):
+    now = int(time.time())
+    cutoff = now - 90 * 86400
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO cleanup_events (occurred_at, action, item_count, bytes_freed) VALUES (?,?,?,?)",
+            (now, action, item_count, bytes_freed),
+        )
+        c.execute("DELETE FROM cleanup_events WHERE occurred_at < ?", (cutoff,))
+
+
+def get_scan_history(days=30):
+    cutoff = int(time.time()) - days * 86400
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT scanned_at, orphan_count, orphan_size FROM scan_history "
+            "WHERE scanned_at >= ? ORDER BY scanned_at",
+            (cutoff,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_cleanup_history(days=30):
+    cutoff = int(time.time()) - days * 86400
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT occurred_at, action, item_count, bytes_freed FROM cleanup_events "
+            "WHERE occurred_at >= ? ORDER BY occurred_at",
+            (cutoff,),
+        ).fetchall()
+        return [dict(r) for r in rows]

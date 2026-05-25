@@ -3,6 +3,7 @@ import logging
 import shutil
 import threading
 import time
+from pathlib import Path
 from flask import Flask, jsonify, request, render_template
 import config
 import db
@@ -26,6 +27,9 @@ with app.app_context():
 
 _worker_thread = None
 _worker_lock = threading.Lock()
+_scan_lock = threading.Lock()
+_scan_running = False
+_last_purge_check = 0
 
 
 def _startup_cleanup():
@@ -162,6 +166,7 @@ def _execute_job(job):
 
 
 def _job_worker():
+    global _scan_running, _last_purge_check
     while True:
         try:
             job = db.claim_next_job()
@@ -172,6 +177,7 @@ def _job_worker():
                     result = _execute_job(job)
                     if not db.is_job_cancelled(job["id"]):
                         db.complete_job(job["id"], result)
+                        _record_job_stats(job["type"], result)
                     log.info("Job %s done", job["id"][:8])
                 except Exception as e:
                     log.error("Job %s failed: %s", job["id"][:8], e)
@@ -179,10 +185,76 @@ def _job_worker():
                         db.fail_job(job["id"], str(e))
             else:
                 db.prune_jobs()
+                _maybe_auto_scan()
+                _maybe_purge_trash()
                 time.sleep(0.5)
         except Exception as e:
             log.error("Job worker crash: %s", e)
             time.sleep(1)
+
+
+def _record_job_stats(jtype, result):
+    try:
+        if jtype == "move_to_trash" and result.get("moved"):
+            bytes_freed = 0
+            for m in result["moved"]:
+                try:
+                    dest = Path(m["to"])
+                    if dest.is_dir() and not dest.is_symlink():
+                        bytes_freed += sum(
+                            f.stat().st_size for f in dest.rglob("*")
+                            if f.is_file() and not f.is_symlink()
+                        )
+                    elif dest.exists():
+                        bytes_freed += dest.stat().st_size
+                except OSError:
+                    pass
+            db.record_cleanup("trash", len(result["moved"]), bytes_freed)
+        elif jtype == "delete" and result.get("deleted"):
+            db.record_cleanup("delete", len(result["deleted"]), 0)
+    except Exception as e:
+        log.warning("Failed to record job stats: %s", e)
+
+
+def _maybe_auto_scan():
+    global _scan_running
+    if not config.SCAN_INTERVAL_HOURS:
+        return
+    interval = config.SCAN_INTERVAL_HOURS * 3600
+    if time.time() - db.last_scan_time() < interval:
+        return
+    with _scan_lock:
+        if _scan_running:
+            return
+        _scan_running = True
+
+    def _run():
+        global _scan_running
+        try:
+            log.info("Auto-scan triggered (interval: %dh)", config.SCAN_INTERVAL_HOURS)
+            _fresh_scan()
+        except Exception as e:
+            log.error("Auto-scan failed: %s", e)
+        finally:
+            _scan_running = False
+
+    threading.Thread(target=_run, daemon=True, name="auto-scan").start()
+
+
+def _maybe_purge_trash():
+    global _last_purge_check
+    if not config.TRASH_PURGE_DAYS:
+        return
+    if time.time() - _last_purge_check < 3600:
+        return
+    _last_purge_check = time.time()
+    try:
+        n = trash_mod.purge_old_trash(config.TRASH_PURGE_DAYS)
+        if n:
+            log.info("Auto-purge: removed %d item(s) from trash (>%dd old)",
+                     n, config.TRASH_PURGE_DAYS)
+    except Exception as e:
+        log.warning("Auto-purge failed: %s", e)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -200,6 +272,7 @@ def _fresh_scan():
 
     _, newly_found = db.set_orphan_cache(result)
     log.info("Scan complete: %d orphan(s), %d new", len(result), len(newly_found))
+    db.record_scan(len(result), sum(o["size"] for o in result))
 
     if config.AUTO_TRASH_DAYS:
         for path in db.get_auto_trash_candidates():
@@ -382,3 +455,15 @@ def api_ignore_remove():
     db.remove_from_ignore(path)
     db.invalidate()
     return jsonify({"ok": True})
+
+
+@app.route("/api/stats")
+def api_stats():
+    orphans = db.get_cached_orphans()
+    return jsonify({
+        "orphan_count": len(orphans),
+        "orphan_size": sum(o["size"] for o in orphans),
+        "trash_size": sum(i["size"] for i in trash_mod.list_trash()),
+        "scan_history": db.get_scan_history(days=30),
+        "cleanup_history": db.get_cleanup_history(days=30),
+    })
