@@ -155,8 +155,18 @@ def remove_from_cache(path):
 
 
 def remove_subtree_from_cache(path):
-    """Remove path and all cached entries matching it (exact prefix or glob pattern)."""
+    """Remove cached entries matching the given path/pattern.
+
+    path//  → remove only the folder entry itself (folder-only scope)
+    path/*  → remove all children (contents-only scope, glob)
+    path    → remove folder and all children (full scope)
+    """
     import fnmatch as _fnmatch
+    if path.endswith('//'):
+        clean = path.rstrip('/')
+        with _conn() as c:
+            c.execute("DELETE FROM orphan_cache WHERE path = ?", (clean,))
+        return
     has_glob = any(c in path for c in '*?[')
     prefix = path.rstrip('/') + '/'
     with _conn() as c:

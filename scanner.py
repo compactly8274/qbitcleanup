@@ -80,6 +80,8 @@ def _is_ignored(entry, ignore_paths):
         return False
     s = str(entry)
     for ig in ignore_paths:
+        if ig.endswith('//'):
+            continue  # folder-only patterns handled separately in _scan_dir
         if any(c in ig for c in '*?['):
             if fnmatch.fnmatchcase(s, ig):
                 return True
@@ -87,6 +89,14 @@ def _is_ignored(entry, ignore_paths):
             if s == ig or s.startswith(ig.rstrip("/") + "/"):
                 return True
     return False
+
+
+def _is_folder_only_ignored(entry, ignore_paths):
+    """Returns True for directories stored with // suffix — recurse in but don't add as orphan."""
+    if not ignore_paths:
+        return False
+    s = str(entry).rstrip('/')
+    return any(ig.endswith('//') and s == ig.rstrip('/') for ig in ignore_paths)
 
 
 def _has_protected_descendant(directory, protected_paths):
@@ -126,7 +136,10 @@ def _scan_dir(directory, protected_paths, trash, downloads_root, results,
                 pass
 
         if entry.is_dir() and not entry.is_symlink():
-            if _has_protected_descendant(entry, protected_paths):
+            if _is_folder_only_ignored(entry, ignore_paths):
+                _scan_dir(entry, protected_paths, trash, downloads_root, results,
+                          ignore_paths, min_age_seconds)
+            elif _has_protected_descendant(entry, protected_paths):
                 _scan_dir(entry, protected_paths, trash, downloads_root, results,
                           ignore_paths, min_age_seconds)
             else:
