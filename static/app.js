@@ -488,25 +488,38 @@ async function loadIgnored() {
   }
 }
 
+function _ignorePatternMeta(raw) {
+  if (raw.endsWith('//')) return { display: raw.slice(0, -2), scope: 'folder only' };
+  if (raw.endsWith('/*')) return { display: raw, scope: 'contents only' };
+  if (/[*?[\]]/.test(raw))  return { display: raw, scope: 'pattern' };
+  return { display: raw, scope: 'folder + contents' };
+}
+
 function renderIgnored() {
   const list = document.getElementById('ignored-list');
   if (!ignoredData.length) {
     list.innerHTML = '<div class="empty-state"><div class="empty-icon">✓</div><div>No ignored paths</div></div>';
     return;
   }
-  list.innerHTML = ignoredData.map(item => `
+  list.innerHTML = ignoredData.map(item => {
+    const { display, scope } = _ignorePatternMeta(item.path);
+    const pa = escAttr(item.path);
+    return `
     <div class="file-row">
       <div class="row-check"></div>
       <div class="file-icon">🚫</div>
       <div class="file-info">
-        <div class="file-name" title="${escAttr(item.path)}">${escHtml(item.path)}</div>
-        <div class="file-meta"><span>Added ${new Date(item.added_at * 1000).toLocaleDateString()}</span></div>
+        <div class="file-name" style="cursor:default">${escHtml(display)}</div>
+        <div class="file-meta">
+          <span class="ignore-scope-badge">${escHtml(scope)}</span>
+          <span>Added ${new Date(item.added_at * 1000).toLocaleDateString()}</span>
+        </div>
       </div>
       <div class="file-actions">
-        <button class="btn btn-secondary btn-sm" onclick="unignore('${escAttr(item.path)}')">Unignore</button>
+        <button class="btn btn-secondary btn-sm" onclick="unignore('${pa}')">Unignore</button>
       </div>
-    </div>
-  `).join('');
+    </div>`;
+  }).join('');
 }
 
 // ── Filtering + sorting ───────────────────────────────────────────────────────
@@ -696,11 +709,11 @@ function _openIgnoreDialog(path, isDir) {
   const scopeHtml = isDir ? `
     <div class="ignore-scope-options">
       <label class="ignore-scope-opt">
-        <input type="radio" name="ignore-scope" value="folder" checked
-               onchange="_ignoreDialogScopeChange('folder')">
+        <input type="radio" name="ignore-scope" value="full" checked
+               onchange="_ignoreDialogScopeChange('full')">
         <div>
           <div class="ignore-scope-title">Folder and contents</div>
-          <div class="ignore-scope-desc">This folder is completely hidden from scans</div>
+          <div class="ignore-scope-desc">Folder and everything inside is hidden from scans</div>
         </div>
       </label>
       <label class="ignore-scope-opt">
@@ -708,7 +721,15 @@ function _openIgnoreDialog(path, isDir) {
                onchange="_ignoreDialogScopeChange('contents')">
         <div>
           <div class="ignore-scope-title">Contents only</div>
-          <div class="ignore-scope-desc">Folder stays visible if orphaned; items inside are ignored</div>
+          <div class="ignore-scope-desc">Folder stays visible if orphaned; items inside are hidden</div>
+        </div>
+      </label>
+      <label class="ignore-scope-opt">
+        <input type="radio" name="ignore-scope" value="folder"
+               onchange="_ignoreDialogScopeChange('folder')">
+        <div>
+          <div class="ignore-scope-title">Folder only</div>
+          <div class="ignore-scope-desc">Folder entry is hidden; items inside appear as individual orphans</div>
         </div>
       </label>
     </div>` : '';
@@ -751,12 +772,16 @@ function _openIgnoreDialog(path, isDir) {
 function _ignoreDialogScopeChange(scope) {
   const inp = document.getElementById('ignore-pattern-input');
   if (!inp) return;
-  inp.value = scope === 'contents'
-    ? _ignoreDialogBasePath.replace(/\/$/, '') + '/*'
-    : _ignoreDialogBasePath;
+  const base = _ignoreDialogBasePath.replace(/\/$/, '');
+  if (scope === 'contents') inp.value = base + '/*';
+  else if (scope === 'folder') inp.value = base + '//';
+  else inp.value = base;
 }
 
 function _pathMatchesIgnore(path, pattern) {
+  if (pattern.endsWith('//')) {
+    return path === pattern.slice(0, -2).replace(/\/$/, '');
+  }
   if (!/[*?[\]]/.test(pattern)) {
     return path === pattern || path.startsWith(pattern.replace(/\/$/, '') + '/');
   }
