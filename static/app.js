@@ -6,6 +6,7 @@ let currentTab = 'orphans';
 let orphansData = [];
 let trashData = [];
 let ignoredData = [];
+let deadData = [];
 let lastOrphanRes = null;
 let selectedPaths = new Set();
 let groupingEnabled = false;
@@ -61,6 +62,7 @@ function switchTab(tab) {
   clearSelection();
   if (tab === 'orphans') loadOrphans();
   else if (tab === 'trash') loadTrash();
+  else if (tab === 'dead') loadDead();
   else if (tab === 'stats') loadStats();
   else loadIgnored();
 }
@@ -973,6 +975,96 @@ async function deleteSelected() {
     } catch (e) {
       showToast(e.message, 'error');
       loadTrash();
+    }
+  });
+}
+
+// ── Unregistered torrents ─────────────────────────────────────────────────────
+
+async function loadDead() {
+  setListLoading('dead-list', 'Checking tracker status… (may take a few seconds)');
+  try {
+    const res = await apiFetch('/api/unregistered');
+    deadData = res.torrents ?? [];
+    renderDead();
+    setBadge('dead', deadData.length || '');
+  } catch (err) {
+    document.getElementById('dead-list').innerHTML =
+      `<div class="error-banner">${escHtml(err.message)}</div>`;
+  }
+}
+
+function renderDead() {
+  const list = document.getElementById('dead-list');
+  if (!deadData.length) {
+    list.innerHTML = '<div class="empty-state"><div class="empty-icon">✓</div><div>No unregistered torrents found</div></div>';
+    return;
+  }
+  list.innerHTML = deadData.map(t => _deadRow(t)).join('');
+}
+
+function _deadRow(t) {
+  const h = escAttr(t.hash);
+  const added = t.added_on ? new Date(t.added_on * 1000).toLocaleDateString() : '—';
+  return `<div class="file-row">
+    <div class="row-check"></div>
+    <div class="file-icon">🧲</div>
+    <div class="file-info">
+      <div class="file-name" style="cursor:default">${escHtml(t.name)}</div>
+      <div class="file-meta">
+        <span>${escHtml(t.size_human)}</span>
+        <span>ratio ${t.ratio}</span>
+        <span>added ${added}</span>
+      </div>
+      <div class="file-path">${escHtml(t.save_path)}</div>
+      <div class="file-meta" style="color:var(--danger);margin-top:0.15rem">⚠ ${escHtml(t.tracker_msg)}</div>
+    </div>
+    <div class="file-actions">
+      <button class="btn btn-secondary btn-sm" onclick="removeOneDead('${h}',false)" title="Remove from qBittorrent — files stay on disk and will appear as orphans">Remove</button>
+      <button class="btn btn-danger btn-sm btn-ghost" onclick="removeOneDead('${h}',true)" title="Remove from qBittorrent AND permanently delete all files">Delete</button>
+    </div>
+  </div>`;
+}
+
+async function removeOneDead(hash, deleteFiles) {
+  const title = deleteFiles ? 'Delete Torrent + Files' : 'Remove Torrent';
+  const body = deleteFiles
+    ? 'Permanently delete this torrent and all its files from disk? This cannot be undone.'
+    : 'Remove this torrent from qBittorrent? Files will stay on disk and appear as orphans on the next scan.';
+  confirm(title, body, async () => {
+    deadData = deadData.filter(t => t.hash !== hash);
+    renderDead();
+    setBadge('dead', deadData.length || '');
+    try {
+      await apiFetch('/api/unregistered/remove', 'POST', { hashes: [hash], delete_files: deleteFiles });
+      showToast(deleteFiles ? 'Torrent and files deleted' : 'Torrent removed — rescan orphans to see freed files', 'success');
+      refreshStatus();
+    } catch (e) {
+      showToast(e.message, 'error');
+      loadDead();
+    }
+  });
+}
+
+async function removeAllDead(deleteFiles) {
+  const n = deadData.length;
+  if (!n) return;
+  const title = deleteFiles ? 'Delete All + Files' : 'Remove All Torrents';
+  const body = deleteFiles
+    ? `Permanently delete all ${n} unregistered torrent${n !== 1 ? 's' : ''} and their files? This cannot be undone.`
+    : `Remove all ${n} unregistered torrent${n !== 1 ? 's' : ''} from qBittorrent? Files will stay on disk as orphans.`;
+  confirm(title, body, async () => {
+    const hashes = deadData.map(t => t.hash);
+    deadData = [];
+    renderDead();
+    setBadge('dead', '');
+    try {
+      await apiFetch('/api/unregistered/remove', 'POST', { hashes, delete_files: deleteFiles });
+      showToast(deleteFiles ? `Deleted ${n} torrent${n !== 1 ? 's' : ''} and files` : `Removed ${n} torrent${n !== 1 ? 's' : ''}`, 'success');
+      refreshStatus();
+    } catch (e) {
+      showToast(e.message, 'error');
+      loadDead();
     }
   });
 }

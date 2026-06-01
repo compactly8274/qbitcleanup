@@ -31,6 +31,9 @@
     <button class="tab" data-tab="trash">
       Trash <span class="badge" id="badge-trash">0</span>
     </button>
+    <button class="tab" data-tab="dead">
+      Unregistered <span class="badge" id="badge-dead"></span>
+    </button>
     <button class="tab" data-tab="ignored">
       Ignored <span class="badge" id="badge-ignored">0</span>
     </button>
@@ -98,6 +101,17 @@
         <input class="search-input" id="search-trash" type="search" placeholder="Search files…" oninput="renderTrash()">
       </div>
       <div class="list-container" id="trash-list"></div>
+    </section>
+
+    <!-- UNREGISTERED TORRENTS -->
+    <section id="view-dead" class="view">
+      <div class="toolbar">
+        <button class="btn btn-secondary" onclick="removeAllDead(false)">Remove All</button>
+        <button class="btn btn-danger" onclick="removeAllDead(true)">Delete All + Files</button>
+        <button class="btn btn-secondary" onclick="loadDead()">Refresh</button>
+      </div>
+      <div class="toolbar-hint">Remove = keeps files on disk (appear as orphans on next scan) &nbsp;·&nbsp; Delete = permanently removes files too</div>
+      <div class="list-container" id="dead-list"></div>
     </section>
 
     <!-- IGNORED -->

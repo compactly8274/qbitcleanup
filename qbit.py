@@ -6,6 +6,25 @@ log = logging.getLogger(__name__)
 
 _client = None
 
+_UNREGISTERED_MSGS = (
+    "unregistered torrent",
+    "not registered",
+    "torrent not found",
+    "torrent not registered",
+    "infohash not found",
+    "could not find torrent",
+    "unknown infohash",
+    "info_hash not found",
+)
+
+
+def _fmt_size(b):
+    for u in ("B", "KB", "MB", "GB", "TB"):
+        if b < 1024:
+            return f"{b:.1f} {u}"
+        b /= 1024
+    return f"{b:.1f} PB"
+
 
 def _get_client():
     global _client
@@ -95,3 +114,65 @@ def get_torrent_paths():
             log.debug("Could not fetch files for torrent %s: %s", t.hash, e)
 
     return paths
+
+
+def get_unregistered_torrents():
+    """Return torrents where any tracker reports an unregistered-type error.
+    Makes one extra API call per torrent to check tracker messages."""
+    client = _get_client()
+    try:
+        _connect(client)
+        torrents = client.torrents_info()
+    except Exception as e:
+        log.warning("Failed to fetch torrent list: %s", e)
+        return None
+
+    result = []
+    for t in torrents:
+        try:
+            trackers = client.torrents_trackers(torrent_hash=t.hash)
+        except Exception:
+            continue
+
+        tracker_msg = ""
+        for tr in trackers:
+            if (tr.url or "") in ("** [DHT] **", "** [PeX] **", "** [LSD] **"):
+                continue
+            msg = (tr.msg or "").lower()
+            if any(p in msg for p in _UNREGISTERED_MSGS):
+                tracker_msg = tr.msg or msg
+                break
+
+        if not tracker_msg:
+            continue
+
+        size = t.size or 0
+        result.append({
+            "hash": t.hash,
+            "name": t.name or "",
+            "save_path": (t.save_path or "").rstrip("/"),
+            "content_path": (t.content_path or "").rstrip("/"),
+            "size": size,
+            "size_human": _fmt_size(size),
+            "added_on": t.added_on or 0,
+            "ratio": round(float(t.ratio or 0), 2),
+            "state": t.state or "",
+            "tracker": t.tracker or "",
+            "tracker_msg": tracker_msg,
+        })
+
+    log.info("Unregistered torrent check: %d found out of %d", len(result), len(torrents))
+    return result
+
+
+def remove_torrents(hashes, delete_files=False):
+    """Remove torrents from qBittorrent. If delete_files=True, also deletes data files."""
+    client = _get_client()
+    try:
+        _connect(client)
+        client.torrents_delete(delete_files=delete_files, torrent_hashes=hashes)
+        log.info("Removed %d torrent(s) (delete_files=%s)", len(hashes), delete_files)
+        return True
+    except Exception as e:
+        log.warning("Failed to remove torrents: %s", e)
+        return False
