@@ -7,7 +7,7 @@ log = logging.getLogger(__name__)
 _client = None
 
 _UNREGISTERED_MSGS = (
-    "unregistered torrent",
+    "unregistered",          # covers "Unregistered", "Unregistered torrent", etc.
     "not registered",
     "torrent not found",
     "torrent not registered",
@@ -15,6 +15,10 @@ _UNREGISTERED_MSGS = (
     "could not find torrent",
     "unknown infohash",
     "info_hash not found",
+    "torrent not exist",
+    "does not exist",
+    "torrent has been deleted",
+    "torrent has been removed",
 )
 
 
@@ -138,9 +142,12 @@ def get_unregistered_torrents():
         for tr in trackers:
             if (tr.url or "") in ("** [DHT] **", "** [PeX] **", "** [LSD] **"):
                 continue
-            msg = (tr.msg or "").lower()
+            raw = tr.msg or ""
+            if tr.status == 4 and raw:
+                log.debug("Tracker status=4 for %r: %r", t.name, raw)
+            msg = raw.lower()
             if any(p in msg for p in _UNREGISTERED_MSGS):
-                tracker_msg = tr.msg or msg
+                tracker_msg = raw
                 break
 
         if not tracker_msg:
