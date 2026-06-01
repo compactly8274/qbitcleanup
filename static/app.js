@@ -11,6 +11,7 @@ let selectedPaths = new Set();
 let groupingEnabled = false;
 let groupingMode = 'none'; // 'none' | 'type' | 'folder'
 let _groupPathStore = [];
+let _ignoreDialogBasePath = '';
 
 // Pagination
 let pageSize = 50;
@@ -594,7 +595,7 @@ function fileRow(item, type) {
   let actions = '';
   if (isOrphan) {
     actions = `<button class="btn btn-warning btn-sm" onclick="moveOne('${pa}')">Trash</button>
-               <button class="btn btn-ghost btn-sm" onclick="ignoreOne('${pa}')">Ignore</button>`;
+               <button class="btn btn-ghost btn-sm" onclick="ignoreOne('${pa}',${item.is_dir})">Ignore</button>`;
   } else {
     actions = `<button class="btn btn-success btn-sm" onclick="restoreOne('${pa}')">Restore</button>
                <button class="btn btn-danger btn-sm btn-ghost" onclick="deleteOne('${pa}')">Delete</button>`;
@@ -686,11 +687,32 @@ async function moveOne(path) {
   }
 }
 
-function ignoreOne(path) {
-  _openIgnoreDialog(path);
+function ignoreOne(path, isDir) {
+  _openIgnoreDialog(path, !!isDir);
 }
 
-function _openIgnoreDialog(path) {
+function _openIgnoreDialog(path, isDir) {
+  _ignoreDialogBasePath = path;
+  const scopeHtml = isDir ? `
+    <div class="ignore-scope-options">
+      <label class="ignore-scope-opt">
+        <input type="radio" name="ignore-scope" value="folder" checked
+               onchange="_ignoreDialogScopeChange('folder')">
+        <div>
+          <div class="ignore-scope-title">Folder and contents</div>
+          <div class="ignore-scope-desc">This folder is completely hidden from scans</div>
+        </div>
+      </label>
+      <label class="ignore-scope-opt">
+        <input type="radio" name="ignore-scope" value="contents"
+               onchange="_ignoreDialogScopeChange('contents')">
+        <div>
+          <div class="ignore-scope-title">Contents only</div>
+          <div class="ignore-scope-desc">Folder stays visible if orphaned; items inside are ignored</div>
+        </div>
+      </label>
+    </div>` : '';
+
   document.getElementById('modal-title').textContent = 'Ignore path';
   document.getElementById('modal-body').innerHTML = `
     <div style="margin-bottom:0.5rem;font-size:0.82rem">
@@ -702,6 +724,7 @@ function _openIgnoreDialog(path) {
            style="width:100%;font-family:monospace;font-size:0.82rem"
            value="${escHtml(path)}"
            onkeydown="if(event.key==='Enter')document.getElementById('modal-confirm-btn').click()">
+    ${scopeHtml}
   `;
   const btn = document.getElementById('modal-confirm-btn');
   btn.className = 'btn btn-secondary';
@@ -725,16 +748,23 @@ function _openIgnoreDialog(path) {
   });
 }
 
+function _ignoreDialogScopeChange(scope) {
+  const inp = document.getElementById('ignore-pattern-input');
+  if (!inp) return;
+  inp.value = scope === 'contents'
+    ? _ignoreDialogBasePath.replace(/\/$/, '') + '/*'
+    : _ignoreDialogBasePath;
+}
+
 function _pathMatchesIgnore(path, pattern) {
   if (!/[*?[\]]/.test(pattern)) {
     return path === pattern || path.startsWith(pattern.replace(/\/$/, '') + '/');
   }
+  // Match Python fnmatch: * matches anything including /
   const re = new RegExp('^' + pattern
     .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-    .replace(/\*\*/g, '\x01')
-    .replace(/\*/g, '[^/]*')
-    .replace(/\?/g, '[^/]')
-    .replace(/\x01/g, '.*') + '$');
+    .replace(/\*/g, '.*')
+    .replace(/\?/g, '.') + '$');
   return re.test(path);
 }
 
