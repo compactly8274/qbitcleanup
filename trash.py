@@ -137,40 +137,47 @@ def list_trash():
     seen = set()
     items = []
     for trash_dir in trash_dirs:
-        try:
-            entries = sorted(trash_dir.iterdir(), key=lambda e: e.name.lower())
-        except OSError:
-            continue
-        for entry in entries:
-            key = str(entry.resolve())
-            if key in seen:
-                continue
-            seen.add(key)
-            if entry.name.startswith('.') or entry.name.endswith('.meta.json'):
-                continue
-
-            meta = _read_meta(entry)
-            original_path = meta.get("original_path", "")
-            size = _dir_size(entry) if entry.is_dir() else _file_size(entry)
-            try:
-                st = entry.stat()
-                mtime = int(st.st_mtime)
-                atime = int(st.st_atime)
-            except OSError:
-                mtime = atime = 0
-
-            items.append({
-                "trash_path": str(entry),
-                "name": entry.name,
-                "original_path": original_path,
-                "size": size,
-                "size_human": _format_size(size),
-                "modified": mtime,
-                "accessed": atime,
-                "is_dir": entry.is_dir() and not entry.is_symlink(),
-            })
-
+        _collect_trash_items(trash_dir, seen, items)
     return items
+
+
+def _collect_trash_items(current_dir, seen, items):
+    """Recursively collect real trash entries (those with a .meta.json sidecar).
+    Directories without .meta.json are path-structure containers created by
+    move_to_trash — recurse into them rather than listing them as items."""
+    try:
+        entries = sorted(current_dir.iterdir(), key=lambda e: e.name.lower())
+    except OSError:
+        return
+    for entry in entries:
+        if entry.name.startswith('.') or entry.name.endswith('.meta.json'):
+            continue
+        if entry.is_dir() and not entry.is_symlink() and not _meta_path(entry).exists():
+            _collect_trash_items(entry, seen, items)
+            continue
+        key = str(entry.resolve())
+        if key in seen:
+            continue
+        seen.add(key)
+        meta = _read_meta(entry)
+        original_path = meta.get("original_path", "")
+        size = _dir_size(entry) if entry.is_dir() else _file_size(entry)
+        try:
+            st = entry.stat()
+            mtime = int(st.st_mtime)
+            atime = int(st.st_atime)
+        except OSError:
+            mtime = atime = 0
+        items.append({
+            "trash_path": str(entry),
+            "name": entry.name,
+            "original_path": original_path,
+            "size": size,
+            "size_human": _format_size(size),
+            "modified": mtime,
+            "accessed": atime,
+            "is_dir": entry.is_dir() and not entry.is_symlink(),
+        })
 
 
 def _file_size(p):
@@ -237,6 +244,27 @@ def restore(trash_path):
     return str(dest)
 
 
+def _prune_empty_containers(directory):
+    """Walk up from directory, removing empty container dirs (no .meta.json)."""
+    primary = Path(config.TRASH_DIR).resolve()
+    downloads = Path(config.DOWNLOADS_DIR).resolve()
+    current = directory
+    while True:
+        resolved = current.resolve()
+        if resolved == primary or resolved == downloads:
+            break
+        if _meta_path(current).exists():
+            break
+        try:
+            if not any(True for _ in current.iterdir()):
+                current.rmdir()
+                current = current.parent
+            else:
+                break
+        except OSError:
+            break
+
+
 def delete(trash_path):
     """Permanently delete a trashed item."""
     tp = Path(trash_path)
@@ -251,6 +279,8 @@ def delete(trash_path):
     mp = _meta_path(tp)
     if mp.exists():
         mp.unlink()
+
+    _prune_empty_containers(tp.parent)
 
 
 def purge_old_trash(days):
@@ -271,25 +301,24 @@ def purge_old_trash(days):
         except (PermissionError, OSError):
             pass
     purged = 0
+    seen = set()
+    candidates = []
     for trash_dir in trash_dirs:
+        _collect_trash_items(trash_dir, seen, candidates)
+    for item in candidates:
+        tp = Path(item["trash_path"])
         try:
-            entries = list(trash_dir.iterdir())
-        except OSError:
-            continue
-        for entry in entries:
-            if entry.name.startswith('.') or entry.name.endswith('.meta.json'):
-                continue
-            try:
-                if entry.stat().st_mtime < cutoff:
-                    if entry.is_dir() and not entry.is_symlink():
-                        shutil.rmtree(str(entry))
-                    else:
-                        entry.unlink()
-                    mp = _meta_path(entry)
-                    if mp.exists():
-                        mp.unlink()
-                    purged += 1
-                    log.info("Auto-purged from trash (>%dd): %s", days, entry.name)
-            except OSError as e:
-                log.warning("Auto-purge failed for %s: %s", entry, e)
+            if tp.stat().st_mtime < cutoff:
+                if tp.is_dir() and not tp.is_symlink():
+                    shutil.rmtree(str(tp))
+                else:
+                    tp.unlink()
+                mp = _meta_path(tp)
+                if mp.exists():
+                    mp.unlink()
+                _prune_empty_containers(tp.parent)
+                purged += 1
+                log.info("Auto-purged from trash (>%dd): %s", days, tp.name)
+        except OSError as e:
+            log.warning("Auto-purge failed for %s: %s", tp, e)
     return purged
