@@ -104,6 +104,15 @@ def _has_protected_descendant(directory, protected_paths):
     return any(p.startswith(prefix) for p in protected_paths)
 
 
+def _has_folder_only_ignored_descendant(directory, ignore_paths):
+    """Returns True if a folder-only ignore pattern lives inside this directory.
+    Used to ensure we recurse into a parent dir instead of treating it as a single orphan."""
+    if not ignore_paths:
+        return False
+    prefix = str(directory).rstrip("/") + "/"
+    return any(ig.endswith('//') and ig.startswith(prefix) for ig in ignore_paths)
+
+
 def _scan_dir(directory, protected_paths, trash, downloads_root, results,
               ignore_paths, min_age_seconds):
     try:
@@ -139,7 +148,8 @@ def _scan_dir(directory, protected_paths, trash, downloads_root, results,
             if _is_folder_only_ignored(entry, ignore_paths):
                 _scan_dir(entry, protected_paths, trash, downloads_root, results,
                           ignore_paths, min_age_seconds)
-            elif _has_protected_descendant(entry, protected_paths):
+            elif (_has_protected_descendant(entry, protected_paths) or
+                  _has_folder_only_ignored_descendant(entry, ignore_paths)):
                 _scan_dir(entry, protected_paths, trash, downloads_root, results,
                           ignore_paths, min_age_seconds)
             else:
