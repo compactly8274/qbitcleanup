@@ -386,6 +386,7 @@ function _handleJobDone(job, info) {
     } else if (job.type === 'delete') {
       const ok = r.deleted?.length ?? 0, fail = r.errors?.length ?? 0;
       msg = `Deleted ${ok}${fail ? `, ${fail} failed` : ''}`;
+      if (fail && r.errors?.[0]?.error) msg += ` — ${r.errors[0].error}`;
     }
     showToast(msg, r.errors?.length ? 'error' : 'success');
   }
@@ -489,7 +490,7 @@ async function loadIgnored() {
 }
 
 function _ignorePatternMeta(raw) {
-  if (raw.endsWith('//')) return { display: raw.slice(0, -2), scope: 'folder only' };
+  if (raw.endsWith('//')) return { display: raw.slice(0, -2), scope: 'folder entry only' };
   if (raw.endsWith('/*')) return { display: raw, scope: 'contents only' };
   if (/[*?[\]]/.test(raw))  return { display: raw, scope: 'pattern' };
   return { display: raw, scope: 'folder + contents' };
@@ -713,7 +714,7 @@ function _openIgnoreDialog(path, isDir) {
                onchange="_ignoreDialogScopeChange('full')">
         <div>
           <div class="ignore-scope-title">Folder and contents</div>
-          <div class="ignore-scope-desc">Folder and everything inside is hidden from scans</div>
+          <div class="ignore-scope-desc">Both the folder and everything inside are fully hidden — nothing inside will ever appear as an orphan</div>
         </div>
       </label>
       <label class="ignore-scope-opt">
@@ -721,15 +722,15 @@ function _openIgnoreDialog(path, isDir) {
                onchange="_ignoreDialogScopeChange('contents')">
         <div>
           <div class="ignore-scope-title">Contents only</div>
-          <div class="ignore-scope-desc">Folder stays visible if orphaned; items inside are hidden</div>
+          <div class="ignore-scope-desc">Files inside are hidden; the folder itself can still appear as an orphan if qBit stops seeding it</div>
         </div>
       </label>
       <label class="ignore-scope-opt">
         <input type="radio" name="ignore-scope" value="folder"
                onchange="_ignoreDialogScopeChange('folder')">
         <div>
-          <div class="ignore-scope-title">Folder only</div>
-          <div class="ignore-scope-desc">Folder entry is hidden; items inside appear as individual orphans</div>
+          <div class="ignore-scope-title">Folder entry only</div>
+          <div class="ignore-scope-desc">The folder row is hidden, but files inside will still show up individually as orphans and can be trashed</div>
         </div>
       </label>
     </div>` : '';
@@ -1119,8 +1120,9 @@ function confirm(title, body, cb) {
   document.getElementById('modal-body').textContent = body;
   const btn = document.getElementById('modal-confirm-btn');
   btn.onclick = () => { closeModal(); cb(); };
-  btn.className = title.toLowerCase().includes('delete') ? 'btn btn-danger' : 'btn btn-warning';
-  btn.textContent = title.toLowerCase().includes('restore') ? 'Restore' : 'Confirm';
+  const tl = title.toLowerCase();
+  btn.className = tl.includes('delete') ? 'btn btn-danger' : 'btn btn-warning';
+  btn.textContent = tl.includes('restore') ? 'Restore' : tl.includes('delete') ? 'Delete' : 'Confirm';
   document.getElementById('modal-backdrop').classList.add('open');
 }
 function closeModal() { document.getElementById('modal-backdrop').classList.remove('open'); }
@@ -1133,7 +1135,7 @@ function showToast(msg, type = 'info') {
   el.textContent = msg;
   el.className = `toast ${type} show`;
   clearTimeout(_toastTimer);
-  _toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
+  _toastTimer = setTimeout(() => el.classList.remove('show'), type === 'error' ? 7000 : 3000);
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
