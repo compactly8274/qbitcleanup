@@ -197,6 +197,12 @@ main { max-width: 900px; margin: 0 auto; padding: 0 1rem 6rem; }
   padding: 0.6rem 0.75rem;
 }
 .toolbar-label { font-size: 0.82rem; color: var(--text-muted); }
+.toolbar-hint {
+  font-size: 0.75rem; color: var(--text-muted);
+  padding: 0.3rem 0.75rem;
+  background: var(--surface2);
+  border: 1px solid var(--border); border-top: none;
+}
 
 /* FILTER BAR */
 .filter-bar {

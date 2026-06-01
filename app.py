@@ -457,6 +457,32 @@ def api_ignore_remove():
     return jsonify({"ok": True})
 
 
+@app.route("/api/unregistered")
+def api_unregistered():
+    status = qbit.get_status()
+    if not status["connected"]:
+        return jsonify({"error": f"qBittorrent offline — {status.get('error', '')}".strip(" —")}), 502
+    torrents = qbit.get_unregistered_torrents()
+    if torrents is None:
+        return jsonify({"error": "Failed to fetch torrent data from qBittorrent"}), 502
+    return jsonify({"torrents": torrents})
+
+
+@app.route("/api/unregistered/remove", methods=["POST"])
+def api_unregistered_remove():
+    data = request.get_json(silent=True) or {}
+    hashes = data.get("hashes") or []
+    delete_files = bool(data.get("delete_files", False))
+    if not hashes:
+        return jsonify({"error": "hashes required"}), 400
+    ok = qbit.remove_torrents(hashes, delete_files=delete_files)
+    if not ok:
+        return jsonify({"error": "Failed to remove torrents from qBittorrent"}), 502
+    if not delete_files:
+        db.invalidate()  # files remain on disk as orphans — force fresh scan
+    return jsonify({"ok": True, "count": len(hashes), "delete_files": delete_files})
+
+
 @app.route("/api/stats")
 def api_stats():
     orphans = db.get_cached_orphans()
