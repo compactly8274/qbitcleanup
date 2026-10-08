@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import shutil
 import threading
 import time
@@ -9,6 +10,7 @@ import config
 import db
 import qbit
 import scanner
+import safety
 import trash as trash_mod
 
 logging.basicConfig(
@@ -32,15 +34,19 @@ _scan_running = False
 _last_purge_check = 0
 
 
+# ── Feature flags (via env) ───────────────────────────────────────────────────
+
+HARDLINK_PROTECT = config.HARDLINK_PROTECT
+CROSS_SEED_PROTECT = config.CROSS_SEED_PROTECT
+
+
 def _startup_cleanup():
     # Warn immediately if DOWNLOADS_DIR and TRASH_DIR are on different devices
     try:
-        import os as _os
-        dl_dev = _os.stat(config.DOWNLOADS_DIR).st_dev
+        dl_dev = os.stat(config.DOWNLOADS_DIR).st_dev
         trash = config.TRASH_DIR
-        import pathlib as _pl
-        _pl.Path(trash).mkdir(parents=True, exist_ok=True)
-        tr_dev = _os.stat(trash).st_dev
+        Path(trash).mkdir(parents=True, exist_ok=True)
+        tr_dev = os.stat(trash).st_dev
         if dl_dev != tr_dev:
             log.warning(
                 "TRASH_DIR (%s) is on a different filesystem/dataset than DOWNLOADS_DIR (%s). "
@@ -270,6 +276,16 @@ def _fresh_scan():
     if isinstance(result, dict) and "error" in result:
         return None, result["error"]
 
+    # Augment with safety metadata
+    for entry in result:
+        safety.augment_orphan_info(entry)
+        # Apply feature flags so scanner results match move policy
+        if not config.HARDLINK_PROTECT:
+            entry["is_hardlinked"] = False
+            entry["has_hardlink_descendant"] = False
+        if not config.CROSS_SEED_PROTECT:
+            entry["is_cross_seed"] = False
+
     _, newly_found = db.set_orphan_cache(result)
     log.info("Scan complete: %d orphan(s), %d new", len(result), len(newly_found))
     db.record_scan(len(result), sum(o["size"] for o in result))
@@ -364,14 +380,19 @@ def api_status():
 @app.route("/api/orphans")
 def api_orphans():
     force = request.args.get("refresh", "").lower() in ("1", "true")
+    dry_run = request.args.get("dry_run", "").lower() in ("1", "true")
 
     if not force and db.cache_is_fresh():
         orphans = db.get_cached_orphans()
+        if dry_run:
+            orphans = _mark_safe_to_move(orphans)
         return jsonify({"orphans": orphans, "last_scan": db.last_scan_time(), "cached": True})
 
     status = qbit.get_status()
     if not status["connected"]:
         orphans = db.get_cached_orphans()
+        if dry_run:
+            orphans = _mark_safe_to_move(orphans)
         return jsonify({
             "orphans": orphans,
             "last_scan": db.last_scan_time(),
@@ -383,7 +404,32 @@ def api_orphans():
     if err:
         return jsonify({"error": err}), 502
 
+    if dry_run:
+        orphans = _mark_safe_to_move(orphans)
+
     return jsonify({"orphans": orphans, "last_scan": db.last_scan_time(), "cached": False})
+
+
+def _mark_safe_to_move(orphans):
+    """Re-fetch current torrent paths and mark each orphan with safe_to_move + reason.
+    Feature flags HARDLINK_PROTECT and CROSS_SEED_PROTECT control whether those checks block moves."""
+    claimed = qbit.get_torrent_paths()
+    if claimed is None:
+        for o in orphans:
+            o["safe_to_move"] = False
+            o["unsafe_reason"] = "qBittorrent unreachable; cannot verify"
+        return orphans
+    for o in orphans:
+        # Feature flags: override safety metadata before calling is_safe_to_move
+        if not HARDLINK_PROTECT:
+            o["is_hardlinked"] = False
+            o["has_hardlink_descendant"] = False
+        if not CROSS_SEED_PROTECT:
+            o["is_cross_seed"] = False
+        safe, reason = safety.is_safe_to_move(o, claimed)
+        o["safe_to_move"] = safe
+        o["unsafe_reason"] = reason if not safe else ""
+    return orphans
 
 
 @app.route("/api/orphans/move", methods=["POST"])
@@ -397,20 +443,44 @@ def api_orphans_move():
         return jsonify({"error": "Cannot move orphans: qBittorrent unreachable — refusing to act on stale data."}), 502
 
     if paths:
-        # User selected specific items; re-verify each one is still unclaimed.
+        # User selected specific items; re-verify each one is still unclaimed and safe.
         targets, active_conflicts = _filter_active_paths(paths, claimed)
-        skipped = len(active_conflicts)
+        unsafe = []
+        safe_targets = []
+        for p in targets:
+            # Build minimal entry for safety check
+            entry = {"path": p}
+            safety.augment_orphan_info(entry)
+            if not HARDLINK_PROTECT:
+                entry["is_hardlinked"] = False
+                entry["has_hardlink_descendant"] = False
+            if not CROSS_SEED_PROTECT:
+                entry["is_cross_seed"] = False
+            ok, reason = safety.is_safe_to_move(entry, claimed)
+            if ok:
+                safe_targets.append(p)
+            else:
+                unsafe.append({"path": p, "reason": reason})
+        targets = safe_targets
+        skipped = len(active_conflicts) + len(unsafe)
     else:
         # Bulk "Move All" — force a fresh scan instead of trusting the cache.
         orphans, err = _fresh_scan()
         if err:
             return jsonify({"error": f"Fresh scan failed before move: {err}"}), 502
-        targets = [o["path"] for o in orphans]
-        skipped = 0
+        targets = []
+        unsafe = []
+        for o in orphans:
+            safe, reason = safety.is_safe_to_move(o, claimed)
+            if safe:
+                targets.append(o["path"])
+            else:
+                unsafe.append({"path": o["path"], "reason": reason})
+        skipped = len(unsafe)
 
     if not targets:
-        return jsonify({"queued": False, "count": 0, "skipped": skipped,
-                        "message": "Nothing to move; all paths are still tracked by qBittorrent."})
+        return jsonify({"queued": False, "count": 0, "skipped": skipped, "unsafe": unsafe,
+                        "message": "Nothing safe to move; all paths are still tracked or protected."})
 
     _ensure_worker()
     job_id = db.enqueue_job("move_to_trash", targets)

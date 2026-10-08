@@ -94,6 +94,8 @@ You will also need to add the Docker bridge subnet (typically `172.17.0.0/16`) t
 | `MIN_ORPHAN_AGE_DAYS` | `0` | Exclude files modified within this many days (0 = off) |
 | `AUTO_TRASH_DAYS` | `0` | Auto-move orphans to trash after being seen this many days (0 = off) |
 | `WEBHOOK_URL` | *(empty)* | URL to POST when new orphans are found after a rescan |
+| `HARDLINK_PROTECT` | `true` | Refuse to move orphans with `nlink > 1` (still referenced elsewhere) |
+| `CROSS_SEED_PROTECT` | `true` | Ignore known cross-seed / link-farm staging paths |
 
 ## API Endpoints
 
