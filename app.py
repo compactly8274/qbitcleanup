@@ -315,6 +315,25 @@ def _disk_info():
         return {}
 
 
+def _filter_active_paths(paths, claimed):
+    """Return (safe_targets, active_conflicts) where safe targets are not claimed by qBittorrent.
+    Handles exact matches and parent-directory claims."""
+    claimed_norm = {p.rstrip("/") for p in claimed}
+    safe = []
+    conflicts = []
+    for path in paths:
+        p_norm = path.rstrip("/")
+        if p_norm in claimed_norm:
+            conflicts.append(path)
+            continue
+        # Check if any active torrent path lives inside this directory
+        if any(c.startswith(p_norm + "/") for c in claimed_norm):
+            conflicts.append(path)
+            continue
+        safe.append(path)
+    return safe, conflicts
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route("/")
@@ -371,10 +390,31 @@ def api_orphans():
 def api_orphans_move():
     data = request.get_json(silent=True) or {}
     paths = data.get("paths") or ([data["path"]] if data.get("path") else None)
-    targets = paths if paths else [o["path"] for o in db.get_cached_orphans()]
+
+    # Always work from fresh qBittorrent state so we never trash an active torrent.
+    claimed = qbit.get_torrent_paths()
+    if claimed is None:
+        return jsonify({"error": "Cannot move orphans: qBittorrent unreachable — refusing to act on stale data."}), 502
+
+    if paths:
+        # User selected specific items; re-verify each one is still unclaimed.
+        targets, active_conflicts = _filter_active_paths(paths, claimed)
+        skipped = len(active_conflicts)
+    else:
+        # Bulk "Move All" — force a fresh scan instead of trusting the cache.
+        orphans, err = _fresh_scan()
+        if err:
+            return jsonify({"error": f"Fresh scan failed before move: {err}"}), 502
+        targets = [o["path"] for o in orphans]
+        skipped = 0
+
+    if not targets:
+        return jsonify({"queued": False, "count": 0, "skipped": skipped,
+                        "message": "Nothing to move; all paths are still tracked by qBittorrent."})
+
     _ensure_worker()
     job_id = db.enqueue_job("move_to_trash", targets)
-    return jsonify({"job_id": job_id, "queued": True, "count": len(targets)})
+    return jsonify({"job_id": job_id, "queued": True, "count": len(targets), "skipped": skipped})
 
 
 @app.route("/api/trash")
