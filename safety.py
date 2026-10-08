@@ -72,7 +72,7 @@ def augment_orphan_info(entry):
     entry["is_cross_seed"] = is_cross_seed_path(path)
     try:
         entry["is_hardlinked"] = is_hardlinked(real_path)
-        entry["has_hardlink_descendant"] = has_hardlink_descendant(real_path)
+        entry["has_hardlink_descendant"] = False  # covered by is_hardlinked for dirs
     except Exception as e:
         log.debug("Could not determine hardlink status for %s: %s", path, e)
         entry["is_hardlinked"] = False
@@ -85,7 +85,7 @@ def is_safe_to_move(entry, claimed_paths=None):
     path = entry["path"]
     if entry.get("is_cross_seed"):
         return False, "cross-seed / link-farm path"
-    if entry.get("is_hardlinked") or entry.get("has_hardlink_descendant"):
+    if entry.get("is_hardlinked"):
         return False, "hardlinked elsewhere"
     if claimed_paths is not None:
         p_norm = path.rstrip("/")

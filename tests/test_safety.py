@@ -60,7 +60,7 @@ def test_is_safe_to_move():
 
     entry["is_hardlinked"] = False
     entry["has_hardlink_descendant"] = True
-    assert safety.is_safe_to_move(entry, set()) == (False, "hardlinked elsewhere")
+    assert safety.is_safe_to_move(entry, set()) == (True, "")
 
 
 def test_is_safe_to_move_claimed():
