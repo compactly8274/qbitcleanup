@@ -15,3 +15,5 @@ AUTO_TRASH_DAYS = int(os.environ.get("AUTO_TRASH_DAYS", 0))           # 0 = disa
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "").strip()
 TRASH_PURGE_DAYS = int(os.environ.get("TRASH_PURGE_DAYS", 0))   # 0 = disabled
 SCAN_INTERVAL_HOURS = int(os.environ.get("SCAN_INTERVAL_HOURS", 0))  # 0 = manual only
+HARDLINK_PROTECT = os.environ.get("HARDLINK_PROTECT", "true").lower() in ("1", "true", "yes")
+CROSS_SEED_PROTECT = os.environ.get("CROSS_SEED_PROTECT", "true").lower() in ("1", "true", "yes")
